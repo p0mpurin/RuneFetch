@@ -74,6 +74,7 @@ AccessControlInfo:
     - fs:USER
     - http:C
     - ssl:C
+    - mcu::HWC
 
   FileSystemAccess:
     - DirectSdmc
@@ -87,3 +88,4 @@ SystemControlInfo:
   Dependency:
     http: 0x0004013000002902
     ssl:  0x0004013000002f02
+    mcu:  0x0004013000001f02

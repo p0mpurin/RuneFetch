@@ -6,6 +6,62 @@ namespace {
 alignas(8) u8 g_static_heap[0x10000];
 alignas(0x1000) u8 g_http_buffer[0x4000];
 
+constexpr const char *RUNE3DS_USER_AGENT = "hShop (3DS/CTR/KTR; ARMv6) 3hs/1.5.42";
+
+bool g_led_ready = false;
+u32 g_last_http_status = 0;
+
+void set_info_led(u8 red, u8 green, u8 blue, bool blink)
+{
+	if(!g_led_ready)
+		return;
+
+	InfoLedPattern pattern {};
+	pattern.delay = blink ? 0x04 : 0x10;
+	pattern.smoothing = blink ? 0x00 : 0x02;
+	pattern.loopDelay = 0x00;
+	pattern.blinkSpeed = 0x00;
+
+	for(u32 i = 0; i < 32; ++i)
+	{
+		bool on = !blink || i < 16;
+		pattern.redPattern[i] = on ? red : 0;
+		pattern.greenPattern[i] = on ? green : 0;
+		pattern.bluePattern[i] = on ? blue : 0;
+	}
+
+	MCUHWC_SetInfoLedPattern(&pattern);
+}
+
+void init_led()
+{
+	if(R_SUCCEEDED(mcuHwcInit()))
+	{
+		g_led_ready = true;
+		set_info_led(0, 0, 0, false);
+	}
+}
+
+void led_idle()
+{
+	set_info_led(0, 0, 0, false);
+}
+
+void led_downloading()
+{
+	set_info_led(0, 0, 0xFF, true);
+}
+
+void led_ready()
+{
+	set_info_led(0, 0xFF, 0, true);
+}
+
+void led_error()
+{
+	set_info_led(0xFF, 0, 0, true);
+}
+
 void write_file(const char *path, const char *data, u32 size)
 {
 	FS_Archive archive;
@@ -39,6 +95,7 @@ void write_status(const char *state, const char *job_name, const char *title_id,
 		"done=%llu\n"
 		"total=%llu\n"
 		"result=%08lX\n"
+		"led=%s\n"
 		"message=%s\n",
 		state,
 		job_name ? job_name : "",
@@ -46,6 +103,7 @@ void write_status(const char *state, const char *job_name, const char *title_id,
 		static_cast<unsigned long long>(done),
 		static_cast<unsigned long long>(total),
 		res,
+		g_led_ready ? "ready" : "unavailable",
 		message);
 	if(len > 0)
 		write_file("/3ds/Rune3DS/runefetch/state/status.txt",
@@ -275,7 +333,9 @@ Result open_http_context(httpcContext *ctx, const char *url, u32 *status)
 
 	httpcSetSSLOpt(ctx, SSLCOPT_DisableVerify);
 	httpcSetKeepAlive(ctx, HTTPC_KEEPALIVE_ENABLED);
-	httpcAddRequestHeaderField(ctx, "User-Agent", "RuneFetch/0.1");
+	httpcAddRequestHeaderField(ctx, "User-Agent", RUNE3DS_USER_AGENT);
+	httpcAddRequestHeaderField(ctx, "Accept-Encoding", "identity");
+	httpcAddRequestHeaderField(ctx, "Cache-Control", "no-cache");
 	httpcAddRequestHeaderField(ctx, "Connection", "Keep-Alive");
 
 	res = httpcBeginRequest(ctx);
@@ -302,6 +362,7 @@ Result download_job(const char *job_name, const char *url, const char *title_id,
 	Result res = httpcInit(0);
 	if(R_FAILED(res))
 		return res;
+	g_last_http_status = 0;
 
 	char base[128];
 	char part_path[256];
@@ -355,12 +416,14 @@ Result download_job(const char *job_name, const char *url, const char *title_id,
 
 	if(status != 200)
 	{
+		g_last_http_status = status;
 		res = MAKERESULT(RL_PERMANENT, RS_INVALIDSTATE, RM_APPLICATION, status & 0x3FF);
 		goto out;
 	}
 
 	httpcGetDownloadSizeState(&ctx, nullptr, &total32);
 	total = expected_size ? expected_size : total32;
+	led_downloading();
 	write_status("downloading", job_name, title_id, done, total, 0, "Downloading");
 
 	for(;;)
@@ -427,12 +490,17 @@ void write_job_status()
 	char job_name[128];
 	if(!find_next_job(job_name, sizeof(job_name)))
 	{
-		static const char status[] =
+		led_idle();
+		char status[128];
+		int len = snprintf(status, sizeof(status),
 			"state=idle\n"
 			"result=00000000\n"
-			"message=No jobs found\n";
-		write_file("/3ds/Rune3DS/runefetch/state/status.txt",
-			status, sizeof(status) - 1);
+			"led=%s\n"
+			"message=No jobs found\n",
+			g_led_ready ? "ready" : "unavailable");
+		if(len > 0)
+			write_file("/3ds/Rune3DS/runefetch/state/status.txt",
+				status, static_cast<u32>(len));
 		write_boot_marker("idle");
 		return;
 	}
@@ -457,8 +525,15 @@ void write_job_status()
 				deleted = delete_job(job_name);
 			else
 			{
+				led_error();
+				char message[96];
+				if(g_last_http_status)
+					snprintf(message, sizeof(message), "Download failed; HTTP status %lu",
+						static_cast<unsigned long>(g_last_http_status));
+				else
+					snprintf(message, sizeof(message), "Download failed");
 				write_status("download_failed", job_name, title_id, 0,
-					parse_u64(size_text), download_res, "Download failed");
+					parse_u64(size_text), download_res, message);
 				write_boot_marker("download_failed");
 				return;
 			}
@@ -481,16 +556,22 @@ void write_job_status()
 		"url=%s\n"
 		"deleted=%s\n"
 		"result=00000000\n"
+		"led=%s\n"
 		"message=RuneFetch downloaded queued job\n",
 		loaded ? (deleted ? "download_ready" : "job_delete_failed") : "job_read_failed",
 		job_name,
 		id,
 		title_id,
 		url[0] ? "yes" : "no",
-		deleted ? "yes" : "no");
+		deleted ? "yes" : "no",
+		g_led_ready ? "ready" : "unavailable");
 	if(len > 0)
 		write_file("/3ds/Rune3DS/runefetch/state/status.txt",
 			status, static_cast<u32>(len));
+	if(loaded && deleted)
+		led_ready();
+	else
+		led_error();
 	write_boot_marker(loaded ? (deleted ? "download_ready" : "job_delete_failed") : "job_read_failed");
 }
 }
@@ -540,6 +621,7 @@ int main()
 				"message=RuneFetch folders ready\n";
 			write_file("/3ds/Rune3DS/runefetch/state/status.txt",
 				status, sizeof(status) - 1);
+			init_led();
 			write_job_status();
 		}
 	}

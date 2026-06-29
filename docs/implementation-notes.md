@@ -2,9 +2,9 @@
 
 ## Current MVP
 
-RuneFetch is a polling sysmodule. It checks `/3ds/Rune3DS/runefetch/jobs`
-once per second, downloads the first `.job` it finds, and moves that job to
-`done` or `failed`.
+RuneFetch is an on-demand polling sysmodule. Rune3DS launches it after writing a
+job. It checks `/3ds/Rune3DS/runefetch/jobs` once per second, downloads the
+first `.job` it finds, and moves that job to `done` or `failed`.
 
 The current MVP intentionally avoids app/sysmodule IPC. File handoff is slower,
 but it is easy to inspect on SD and survives crashes.
@@ -16,7 +16,8 @@ For "Download in background", Rune3DS should:
 1. Call the existing catalog download-link function.
 2. Write a `.job` file with the returned direct CIA URL.
 3. Place it in `/3ds/Rune3DS/runefetch/jobs`.
-4. Show the user that RuneFetch accepted the job once `status.txt` changes.
+4. Launch the RuneFetch title ID `0004013000C0FE02`.
+5. Show the user that RuneFetch accepted the job once `status.txt` changes.
 
 Avoid writing the job directly into the jobs directory if possible. Write to a
 temporary path first, close it, then rename it to `.job` so RuneFetch never sees

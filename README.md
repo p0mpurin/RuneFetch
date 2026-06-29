@@ -10,12 +10,13 @@ is added.
 ## Target Flow
 
 1. Rune3DS writes a job into `/3ds/Rune3DS/runefetch/jobs/`.
-2. RuneFetch notices the job and downloads the URL to:
+2. Rune3DS launches the RuneFetch sysmodule through PM.
+3. RuneFetch downloads the URL to:
    `/3ds/Rune3DS/cache/<job-id>.cia.part`
-3. On success, RuneFetch renames it to:
+4. On success, RuneFetch renames it to:
    `/3ds/Rune3DS/cache/<job-id>.cia`
-4. The notification LED blinks green.
-5. The user returns to Rune3DS or FBI to install the cached CIA.
+5. The notification LED blinks green.
+6. The user returns to Rune3DS or FBI to install the cached CIA.
 
 ## Install
 
@@ -32,7 +33,8 @@ card, or disable external modules in the Luma config menu.
 
 ## Status
 
-This repository is at the architecture/MVP scaffold stage. The first target is
-small CIA downloads from Rune3DS-authored direct URL jobs, FBI install first.
+This repository is at the architecture/MVP scaffold stage. RuneFetch is launched
+on demand by Rune3DS after a job is queued. The first target is small CIA
+downloads from Rune3DS-authored direct URL jobs, FBI install first.
 
 See [docs/protocol.md](docs/protocol.md) for the job and status file format.

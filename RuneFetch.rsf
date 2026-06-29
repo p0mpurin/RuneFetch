@@ -7,7 +7,7 @@ BasicInfo:
 
 TitleInfo:
   UniqueId     : 0xC0FE
-  Category     : Base
+  Category     : SystemApplication
   Version      : 1
 
 Option:

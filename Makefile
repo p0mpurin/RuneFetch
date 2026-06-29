@@ -44,13 +44,14 @@ $(OUTPUT).elf: $(OFILES)
 
 $(OUTPUT).cxi: $(OUTPUT).elf RuneFetch.rsf
 	makerom -f ncch -rsf RuneFetch.rsf -nocodepadding -o $@ -elf $<
+	@cp $@ $(CURDIR)/$(TITLEID).cxi
 
 install: $(OUTPUT).cxi
 	@mkdir -p /luma/sysmodules
 	@cp $(OUTPUT).cxi /luma/sysmodules/$(TITLEID).cxi
 
 clean:
-	@rm -rf $(BUILD) $(OUTPUT).elf $(OUTPUT).cxi $(OUTPUT).map
+	@rm -rf $(BUILD) $(OUTPUT).elf $(OUTPUT).cxi $(OUTPUT).map $(CURDIR)/$(TITLEID).cxi
 
 else
 

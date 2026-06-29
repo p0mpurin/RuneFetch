@@ -76,6 +76,8 @@ void led_download_progress(u64 done, u64 total)
 void led_ready()
 {
 	set_info_led(0, 0xFF, 0, true);
+	svcSleepThread(5LL * 1000LL * 1000LL * 1000LL);
+	set_info_led(0, 0xFF, 0, false);
 }
 
 void led_error()

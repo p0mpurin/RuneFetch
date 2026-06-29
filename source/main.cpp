@@ -404,6 +404,33 @@ Result open_http_context(httpcContext *ctx, const char *url, u64 resume_offset, 
 	return res;
 }
 
+Result open_download_context(httpcContext *ctx, const char *url, u64 resume_offset, u32 *status)
+{
+	char current_url[1200];
+	char redirect_url[1200];
+	snprintf(current_url, sizeof(current_url), "%s", url);
+
+	Result res = 0;
+	for(u32 redirects = 0; redirects < 4; ++redirects)
+	{
+		res = open_http_context(ctx, current_url, resume_offset, status);
+		if(R_FAILED(res))
+			return res;
+
+		bool redirect = (*status >= 301 && *status <= 303) || (*status >= 307 && *status <= 308);
+		if(!redirect)
+			return 0;
+
+		res = httpcGetResponseHeader(ctx, "Location", redirect_url, sizeof(redirect_url));
+		httpcCloseContext(ctx);
+		if(R_FAILED(res))
+			return res;
+		snprintf(current_url, sizeof(current_url), "%s", redirect_url);
+	}
+
+	return MAKERESULT(RL_PERMANENT, RS_OUTOFRESOURCE, RM_APPLICATION, 15);
+}
+
 Result download_job(const char *job_name, const char *url, const char *title_id,
 	const char *id, u64 expected_size)
 {
@@ -619,10 +646,6 @@ Result stream_install_job(const char *job_name, const char *url, const char *tit
 	g_last_done = 0;
 	g_last_total = expected_size;
 
-	char current_url[1200];
-	char redirect_url[1200];
-	snprintf(current_url, sizeof(current_url), "%s", url);
-
 	httpcContext ctx {};
 	u32 status = 0;
 	u32 total32 = 0;
@@ -632,29 +655,16 @@ Result stream_install_job(const char *job_name, const char *url, const char *tit
 	u64 done = 0;
 	u64 total = expected_size;
 	u64 last_status_done = 0;
+	u32 reconnects = 0;
 
 	led_downloading();
 	write_status("install_stream_opening", job_name, title_id, 0, total, 0,
 		"Opening stream install");
 
-	for(u32 redirects = 0; redirects < 4; ++redirects)
-	{
-		res = open_http_context(&ctx, current_url, 0, &status);
-		context_open = R_SUCCEEDED(res);
-		if(R_FAILED(res))
-			goto out;
-
-		bool redirect = (status >= 301 && status <= 303) || (status >= 307 && status <= 308);
-		if(!redirect)
-			break;
-
-		res = httpcGetResponseHeader(&ctx, "Location", redirect_url, sizeof(redirect_url));
-		httpcCloseContext(&ctx);
-		context_open = false;
-		if(R_FAILED(res))
-			goto out;
-		snprintf(current_url, sizeof(current_url), "%s", redirect_url);
-	}
+	res = open_download_context(&ctx, url, 0, &status);
+	context_open = R_SUCCEEDED(res);
+	if(R_FAILED(res))
+		goto out;
 
 	if(status != 200)
 	{
@@ -676,6 +686,7 @@ Result stream_install_job(const char *job_name, const char *url, const char *tit
 	write_status("installing", job_name, title_id, done, total, 0,
 		"Downloading and installing");
 
+receive_loop:
 	for(;;)
 	{
 		u32 before = 0;
@@ -716,7 +727,31 @@ Result stream_install_job(const char *job_name, const char *url, const char *tit
 		if(res == static_cast<Result>(HTTPC_RESULTCODE_DOWNLOADPENDING))
 			continue;
 		if(R_FAILED(res))
+		{
+			if(done && done < total && reconnects < 4)
+			{
+				++reconnects;
+				httpcCancelConnection(&ctx);
+				httpcCloseContext(&ctx);
+				context_open = false;
+				write_status("install_reconnecting", job_name, title_id, done, total, res,
+					"HTTP reconnecting during install");
+				svcSleepThread(500LL * 1000LL * 1000LL);
+
+				res = open_download_context(&ctx, url, done, &status);
+				context_open = R_SUCCEEDED(res);
+				if(R_FAILED(res))
+					goto out;
+				if(status != 206)
+				{
+					g_last_http_status = status;
+					res = MAKERESULT(RL_PERMANENT, RS_INVALIDSTATE, RM_APPLICATION, status & 0x3FF);
+					goto out;
+				}
+				goto receive_loop;
+			}
 			goto out;
+		}
 		break;
 	}
 

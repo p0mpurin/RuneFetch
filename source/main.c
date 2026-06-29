@@ -27,16 +27,20 @@ static Result init_core_services(void)
 	if(R_FAILED(res))
 		return res;
 
+	rf_write_boot_marker("fsInit", res);
 	rf_led_stage(1);
 
 	rf_ensure_dirs();
+	rf_write_boot_marker("ensure_dirs", 0);
 	rf_led_stage(2);
 
 	rf_write_status("starting", NULL, 0, 0, 0, "RuneFetch starting");
+	rf_write_boot_marker("status", 0);
 	rf_led_stage(3);
 
 	res = archiveMountSdmc();
 	g_sdmc_mounted = R_SUCCEEDED(res);
+	rf_write_boot_marker(g_sdmc_mounted ? "archive_mount_ok" : "archive_mount_failed", res);
 	rf_led_stage(g_sdmc_mounted ? 4 : 5);
 	return 0;
 }

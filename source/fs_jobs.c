@@ -37,6 +37,25 @@ static void fs_create_dir(FS_Archive archive, const char *path)
 	FSUSER_CreateDirectory(archive, fsMakePath(PATH_ASCII, sd_path(path)), 0);
 }
 
+void rf_write_boot_marker(const char *stage, Result res)
+{
+	char data[128];
+	int len = snprintf(data, sizeof(data), "stage=%s\nresult=%08lX\n", stage ? stage : "unknown", res);
+	if(len <= 0)
+		return;
+
+	Handle file = 0;
+	Result open_res = FSUSER_OpenFileDirectly(&file, ARCHIVE_SDMC,
+		fsMakePath(PATH_EMPTY, NULL), fsMakePath(PATH_ASCII, "/runefetch_boot.txt"),
+		FS_OPEN_CREATE | FS_OPEN_WRITE, 0);
+	if(R_FAILED(open_res))
+		return;
+
+	u32 written = 0;
+	FSFILE_Write(file, &written, 0, data, (u32)len, FS_WRITE_FLUSH);
+	FSFILE_Close(file);
+}
+
 Result rf_ensure_dirs(void)
 {
 	mkdir("sdmc:/3ds", 0777);

@@ -30,6 +30,7 @@ typedef struct {
 } RfJob;
 
 Result rf_ensure_dirs(void);
+void rf_write_boot_marker(const char *stage, Result res);
 bool rf_find_next_job(char *out_name, size_t out_size);
 bool rf_load_job(const char *job_name, RfJob *job);
 Result rf_move_job(const char *job_name, bool success);

@@ -80,6 +80,7 @@ AccessControlInfo:
 
   FileSystemAccess:
     - DirectSdmc
+    - DirectSdmcWrite
     - CategorySystemApplication
 
 SystemControlInfo:

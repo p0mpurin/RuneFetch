@@ -69,6 +69,36 @@ void rf_led_init(void)
 	rf_led_off();
 }
 
+void rf_led_stage(u8 stage)
+{
+	g_last_step = -1;
+	switch(stage)
+	{
+	case 1:
+		solid(0xFF, 0xFF, 0xFF);
+		break;
+	case 2:
+		solid(0, 0, 0xFF);
+		break;
+	case 3:
+		solid(0, 0xFF, 0xFF);
+		break;
+	case 4:
+		solid(0xFF, 0xFF, 0);
+		break;
+	case 5:
+		solid(0xFF, 0, 0xFF);
+		break;
+	case 6:
+		solid(0, 0xFF, 0);
+		break;
+	default:
+		solid(0x40, 0x40, 0x40);
+		break;
+	}
+	svcSleepThread(900ULL * 1000ULL * 1000ULL);
+}
+
 void rf_led_progress(u64 done, u64 total)
 {
 	int percent = total ? (int)((done * 100) / total) : 0;

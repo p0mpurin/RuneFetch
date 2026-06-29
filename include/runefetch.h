@@ -38,6 +38,7 @@ void rf_basename(const RfJob *job, char *out, size_t out_size);
 Result rf_download_job(const RfJob *job);
 
 void rf_led_init(void);
+void rf_led_stage(u8 stage);
 void rf_led_progress(u64 done, u64 total);
 void rf_led_ready(void);
 void rf_led_error(void);

@@ -9,6 +9,15 @@ static void idle_sleep(void)
 	svcSleepThread(1000ULL * 1000ULL * 1000ULL);
 }
 
+static void startup_fail(u8 stage)
+{
+	for(;;)
+	{
+		rf_led_stage(stage);
+		svcSleepThread(600ULL * 1000ULL * 1000ULL);
+	}
+}
+
 static bool g_led_available;
 static bool g_sdmc_mounted;
 
@@ -18,11 +27,17 @@ static Result init_core_services(void)
 	if(R_FAILED(res))
 		return res;
 
+	rf_led_stage(1);
+
 	rf_ensure_dirs();
+	rf_led_stage(2);
+
 	rf_write_status("starting", NULL, 0, 0, 0, "RuneFetch starting");
+	rf_led_stage(3);
 
 	res = archiveMountSdmc();
 	g_sdmc_mounted = R_SUCCEEDED(res);
+	rf_led_stage(g_sdmc_mounted ? 4 : 5);
 	return 0;
 }
 
@@ -30,6 +45,7 @@ static Result init_download_services(void)
 {
 	Result res = acInit();
 	if(R_FAILED(res)) return res;
+	rf_led_stage(6);
 
 	res = ptmuInit();
 	if(R_FAILED(res)) return res;
@@ -62,14 +78,14 @@ int main(int argc, char **argv)
 	Result res = init_core_services();
 	if(R_FAILED(res))
 	{
-		for(;;) idle_sleep();
+		startup_fail(10);
 	}
 
 	res = init_download_services();
 	if(R_FAILED(res))
 	{
 		rf_write_status("failed", NULL, 0, 0, res, "Service initialization failed");
-		for(;;) idle_sleep();
+		startup_fail(11);
 	}
 
 	if(g_led_available)

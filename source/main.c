@@ -1,6 +1,7 @@
 #include "runefetch.h"
 
 #include <3ds.h>
+#include <3ds/archive.h>
 #include <string.h>
 
 static void idle_sleep(void)
@@ -9,10 +10,16 @@ static void idle_sleep(void)
 }
 
 static bool g_led_available;
+static bool g_sdmc_mounted;
 
 static Result init_core_services(void)
 {
 	Result res = fsInit();
+	if(R_FAILED(res))
+		return res;
+
+	res = archiveMountSdmc();
+	g_sdmc_mounted = R_SUCCEEDED(res);
 	if(R_FAILED(res))
 		return res;
 
@@ -44,6 +51,8 @@ static void exit_services(void)
 		ptmSysmExit();
 	ptmuExit();
 	acExit();
+	if(g_sdmc_mounted)
+		archiveUnmount("sdmc:");
 	fsExit();
 }
 

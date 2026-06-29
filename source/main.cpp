@@ -9,6 +9,7 @@ alignas(0x1000) u8 g_http_buffer[0x10000];
 constexpr const char *RUNE3DS_USER_AGENT = "hShop (3DS/CTR/KTR; ARMv6) 3hs/1.5.42";
 constexpr u64 STATUS_UPDATE_STEP = 0x40000;
 constexpr u64 FILE_FLUSH_STEP = 0x100000;
+constexpr u64 STREAM_INSTALL_STATUS_STEP = 0x80000;
 
 bool g_led_ready = false;
 u32 g_last_led_bucket = 0xFFFFFFFF;
@@ -600,6 +601,153 @@ out:
 	return res;
 }
 
+Result stream_install_job(const char *job_name, const char *url, const char *title_id,
+	u64 expected_size)
+{
+	Result res = httpcInit(0);
+	if(R_FAILED(res))
+		return res;
+
+	Result am_res = amInit();
+	if(R_FAILED(am_res))
+	{
+		httpcExit();
+		return am_res;
+	}
+
+	g_last_http_status = 0;
+	g_last_done = 0;
+	g_last_total = expected_size;
+
+	char current_url[1200];
+	char redirect_url[1200];
+	snprintf(current_url, sizeof(current_url), "%s", url);
+
+	httpcContext ctx {};
+	u32 status = 0;
+	u32 total32 = 0;
+	bool context_open = false;
+	Handle cia = 0;
+	bool cia_open = false;
+	u64 done = 0;
+	u64 total = expected_size;
+	u64 last_status_done = 0;
+
+	led_downloading();
+	write_status("install_stream_opening", job_name, title_id, 0, total, 0,
+		"Opening stream install");
+
+	for(u32 redirects = 0; redirects < 4; ++redirects)
+	{
+		res = open_http_context(&ctx, current_url, 0, &status);
+		context_open = R_SUCCEEDED(res);
+		if(R_FAILED(res))
+			goto out;
+
+		bool redirect = (status >= 301 && status <= 303) || (status >= 307 && status <= 308);
+		if(!redirect)
+			break;
+
+		res = httpcGetResponseHeader(&ctx, "Location", redirect_url, sizeof(redirect_url));
+		httpcCloseContext(&ctx);
+		context_open = false;
+		if(R_FAILED(res))
+			goto out;
+		snprintf(current_url, sizeof(current_url), "%s", redirect_url);
+	}
+
+	if(status != 200)
+	{
+		g_last_http_status = status;
+		res = MAKERESULT(RL_PERMANENT, RS_INVALIDSTATE, RM_APPLICATION, status & 0x3FF);
+		goto out;
+	}
+
+	httpcGetDownloadSizeState(&ctx, nullptr, &total32);
+	if(!total)
+		total = total32;
+	g_last_total = total;
+
+	res = AM_StartCiaInstall(MEDIATYPE_SD, &cia);
+	if(R_FAILED(res))
+		goto out;
+	cia_open = true;
+
+	write_status("installing", job_name, title_id, done, total, 0,
+		"Downloading and installing");
+
+	for(;;)
+	{
+		u32 before = 0;
+		u32 after = 0;
+		httpcGetDownloadSizeState(&ctx, &before, nullptr);
+		res = httpcReceiveDataTimeout(&ctx, g_http_buffer, sizeof(g_http_buffer),
+			10ULL * 1000ULL * 1000ULL * 1000ULL);
+		httpcGetDownloadSizeState(&ctx, &after, nullptr);
+
+		u32 chunk = after >= before ? after - before : 0;
+		if(chunk > sizeof(g_http_buffer))
+			chunk = sizeof(g_http_buffer);
+		if(chunk)
+		{
+			u32 written = 0;
+			Result write_res = FSFILE_Write(cia, &written, done, g_http_buffer, chunk, 0);
+			if(R_FAILED(write_res) || written != chunk)
+			{
+				res = R_FAILED(write_res) ? write_res :
+					MAKERESULT(RL_PERMANENT, RS_INTERNAL, RM_APPLICATION, 4);
+				goto out;
+			}
+
+			done += chunk;
+			g_last_done = done;
+			g_last_total = total;
+			led_download_progress(done, total);
+			if(done - last_status_done >= STREAM_INSTALL_STATUS_STEP || (total && done >= total))
+			{
+				write_status("installing", job_name, title_id, done, total, 0,
+					"Downloading and installing");
+				last_status_done = done;
+			}
+
+			svcSleepThread(2LL * 1000LL * 1000LL);
+		}
+
+		if(res == static_cast<Result>(HTTPC_RESULTCODE_DOWNLOADPENDING))
+			continue;
+		if(R_FAILED(res))
+			goto out;
+		break;
+	}
+
+	if(total && done < total)
+	{
+		res = MAKERESULT(RL_PERMANENT, RS_INTERNAL, RM_APPLICATION, 5);
+		goto out;
+	}
+
+	res = 0;
+
+out:
+	if(context_open)
+	{
+		if(R_FAILED(res))
+			httpcCancelConnection(&ctx);
+		httpcCloseContext(&ctx);
+	}
+	if(cia_open)
+	{
+		if(R_FAILED(res))
+			AM_CancelCIAInstall(cia);
+		else
+			res = AM_FinishCiaInstall(cia);
+		svcCloseHandle(cia);
+	}
+	amExit();
+	httpcExit();
+	return res;
+}
+
 void write_job_status()
 {
 	char job_name[128];
@@ -624,6 +772,7 @@ void write_job_status()
 	char id[64];
 	char title_id[32];
 	char size_text[32];
+	char mode[32];
 	char url[1200];
 	bool loaded = read_job(job_name, job_text, sizeof(job_text));
 	bool deleted = false;
@@ -633,23 +782,28 @@ void write_job_status()
 		copy_field(job_text, "title_id", title_id, sizeof(title_id));
 		copy_field(job_text, "url", url, sizeof(url));
 		copy_field(job_text, "size", size_text, sizeof(size_text));
+		copy_field(job_text, "mode", mode, sizeof(mode));
 		if(url[0])
 		{
-			Result download_res = download_job(job_name, url, title_id, id, parse_u64(size_text));
-			if(R_SUCCEEDED(download_res))
+			bool cache_only = strcmp(mode, "cache") == 0 || strcmp(mode, "download_only") == 0;
+			Result job_res = cache_only ?
+				download_job(job_name, url, title_id, id, parse_u64(size_text)) :
+				stream_install_job(job_name, url, title_id, parse_u64(size_text));
+			if(R_SUCCEEDED(job_res))
 				deleted = delete_job(job_name);
 			else
 			{
 				led_error();
 				char message[96];
 				if(g_last_http_status)
-					snprintf(message, sizeof(message), "Download failed; HTTP status %lu",
+					snprintf(message, sizeof(message), "Job failed; HTTP status %lu",
 						static_cast<unsigned long>(g_last_http_status));
 				else
-					snprintf(message, sizeof(message), "Download failed");
-				write_status("download_failed", job_name, title_id, g_last_done,
-					g_last_total ? g_last_total : parse_u64(size_text), download_res, message);
-				write_boot_marker("download_failed");
+					snprintf(message, sizeof(message), "Job failed");
+				write_status(cache_only ? "download_failed" : "install_failed",
+					job_name, title_id, g_last_done,
+					g_last_total ? g_last_total : parse_u64(size_text), job_res, message);
+				write_boot_marker(cache_only ? "download_failed" : "install_failed");
 				return;
 			}
 		}
@@ -660,9 +814,12 @@ void write_job_status()
 		title_id[0] = '\0';
 		url[0] = '\0';
 		size_text[0] = '\0';
+		mode[0] = '\0';
 	}
 
 	char status[512];
+	bool cache_only = strcmp(mode, "cache") == 0 || strcmp(mode, "download_only") == 0;
+	const char *ready_state = cache_only ? "download_ready" : "install_ready";
 	int len = snprintf(status, sizeof(status),
 		"state=%s\n"
 		"job=%s\n"
@@ -672,14 +829,15 @@ void write_job_status()
 		"deleted=%s\n"
 		"result=00000000\n"
 		"led=%s\n"
-		"message=RuneFetch downloaded queued job\n",
-		loaded ? (deleted ? "download_ready" : "job_delete_failed") : "job_read_failed",
+		"message=%s\n",
+		loaded ? (deleted ? ready_state : "job_delete_failed") : "job_read_failed",
 		job_name,
 		id,
 		title_id,
 		url[0] ? "yes" : "no",
 		deleted ? "yes" : "no",
-		g_led_ready ? "ready" : "unavailable");
+		g_led_ready ? "ready" : "unavailable",
+		cache_only ? "RuneFetch downloaded queued job" : "RuneFetch installed queued job");
 	if(len > 0)
 		write_file("/3ds/Rune3DS/runefetch/state/status.txt",
 			status, static_cast<u32>(len));
@@ -687,7 +845,7 @@ void write_job_status()
 		led_ready();
 	else
 		led_error();
-	write_boot_marker(loaded ? (deleted ? "download_ready" : "job_delete_failed") : "job_read_failed");
+	write_boot_marker(loaded ? (deleted ? ready_state : "job_delete_failed") : "job_read_failed");
 }
 }
 

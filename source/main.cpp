@@ -9,7 +9,10 @@ alignas(0x1000) u8 g_http_buffer[0x4000];
 constexpr const char *RUNE3DS_USER_AGENT = "hShop (3DS/CTR/KTR; ARMv6) 3hs/1.5.42";
 
 bool g_led_ready = false;
+u32 g_last_led_bucket = 0xFFFFFFFF;
 u32 g_last_http_status = 0;
+u64 g_last_done = 0;
+u64 g_last_total = 0;
 
 void set_info_led(u8 red, u8 green, u8 blue, bool blink)
 {
@@ -50,6 +53,24 @@ void led_idle()
 void led_downloading()
 {
 	set_info_led(0, 0, 0xFF, true);
+	g_last_led_bucket = 0;
+}
+
+void led_download_progress(u64 done, u64 total)
+{
+	if(!g_led_ready)
+		return;
+
+	u32 bucket = total ? static_cast<u32>((done * 20) / total) : 0;
+	if(bucket > 20)
+		bucket = 20;
+	if(bucket == g_last_led_bucket)
+		return;
+
+	g_last_led_bucket = bucket;
+	u8 green = static_cast<u8>((bucket * 255) / 20);
+	u8 blue = static_cast<u8>(255 - green);
+	set_info_led(0, green, blue, true);
 }
 
 void led_ready()
@@ -269,6 +290,21 @@ Result rename_path(const char *from, const char *to)
 	return res;
 }
 
+bool file_size(const char *path, u64 *size)
+{
+	Handle file = 0;
+	Result res = FSUSER_OpenFileDirectly(&file, ARCHIVE_SDMC,
+		fsMakePath(PATH_EMPTY, nullptr),
+		fsMakePath(PATH_ASCII, path),
+		FS_OPEN_READ, 0);
+	if(R_FAILED(res))
+		return false;
+
+	res = FSFILE_GetSize(file, size);
+	FSFILE_Close(file);
+	return R_SUCCEEDED(res);
+}
+
 void copy_field(const char *text, const char *key, char *out, u32 out_size)
 {
 	if(out_size == 0)
@@ -325,7 +361,7 @@ void safe_basename(const char *primary, const char *fallback, char *out, u32 out
 	out[pos] = '\0';
 }
 
-Result open_http_context(httpcContext *ctx, const char *url, u32 *status)
+Result open_http_context(httpcContext *ctx, const char *url, u64 resume_offset, u32 *status)
 {
 	Result res = httpcOpenContext(ctx, HTTPC_METHOD_GET, url, 0);
 	if(R_FAILED(res))
@@ -337,6 +373,13 @@ Result open_http_context(httpcContext *ctx, const char *url, u32 *status)
 	httpcAddRequestHeaderField(ctx, "Accept-Encoding", "identity");
 	httpcAddRequestHeaderField(ctx, "Cache-Control", "no-cache");
 	httpcAddRequestHeaderField(ctx, "Connection", "Keep-Alive");
+	if(resume_offset)
+	{
+		char range[48];
+		snprintf(range, sizeof(range), "bytes=%llu-",
+			static_cast<unsigned long long>(resume_offset));
+		httpcAddRequestHeaderField(ctx, "Range", range);
+	}
 
 	res = httpcBeginRequest(ctx);
 	if(R_FAILED(res))
@@ -363,6 +406,8 @@ Result download_job(const char *job_name, const char *url, const char *title_id,
 	if(R_FAILED(res))
 		return res;
 	g_last_http_status = 0;
+	g_last_done = 0;
+	g_last_total = expected_size;
 
 	char base[128];
 	char part_path[256];
@@ -371,8 +416,28 @@ Result download_job(const char *job_name, const char *url, const char *title_id,
 	snprintf(part_path, sizeof(part_path), "/3ds/Rune3DS/cache/%s.cia.part", base);
 	snprintf(final_path, sizeof(final_path), "/3ds/Rune3DS/cache/%s.cia", base);
 
-	delete_path(part_path);
-	delete_path(final_path);
+	u64 final_size = 0;
+	if(file_size(final_path, &final_size) && (!expected_size || final_size == expected_size))
+	{
+		httpcExit();
+		return 0;
+	}
+
+	u64 existing_size = 0;
+	if(file_size(part_path, &existing_size))
+	{
+		if(expected_size && existing_size > expected_size)
+		{
+			delete_path(part_path);
+			existing_size = 0;
+		}
+		else if(expected_size && existing_size == expected_size)
+		{
+			res = rename_path(part_path, final_path);
+			httpcExit();
+			return res;
+		}
+	}
 
 	Handle out = 0;
 	res = FSUSER_OpenFileDirectly(&out, ARCHIVE_SDMC,
@@ -392,12 +457,20 @@ Result download_job(const char *job_name, const char *url, const char *title_id,
 	httpcContext ctx {};
 	u32 status = 0;
 	u32 total32 = 0;
-	u64 total = 0;
-	u64 done = 0;
+	u64 total = expected_size;
+	u64 done = existing_size;
 	bool context_open = false;
+	u32 expected_status = existing_size ? 206 : 200;
+	g_last_done = done;
+	g_last_total = total;
+	led_downloading();
+	led_download_progress(done, total);
+	write_status(existing_size ? "resuming" : "downloading",
+		job_name, title_id, done, total, 0,
+		existing_size ? "Resuming download" : "Downloading");
 	for(u32 redirects = 0; redirects < 4; ++redirects)
 	{
-		res = open_http_context(&ctx, current_url, &status);
+		res = open_http_context(&ctx, current_url, existing_size, &status);
 		context_open = R_SUCCEEDED(res);
 		if(R_FAILED(res))
 			goto out;
@@ -414,7 +487,17 @@ Result download_job(const char *job_name, const char *url, const char *title_id,
 		snprintf(current_url, sizeof(current_url), "%s", redirect_url);
 	}
 
-	if(status != 200)
+	if(existing_size && status == 200)
+	{
+		httpcCloseContext(&ctx);
+		context_open = false;
+		FSFILE_Close(out);
+		delete_path(part_path);
+		httpcExit();
+		return download_job(job_name, url, title_id, id, expected_size);
+	}
+
+	if(status != expected_status)
 	{
 		g_last_http_status = status;
 		res = MAKERESULT(RL_PERMANENT, RS_INVALIDSTATE, RM_APPLICATION, status & 0x3FF);
@@ -422,9 +505,14 @@ Result download_job(const char *job_name, const char *url, const char *title_id,
 	}
 
 	httpcGetDownloadSizeState(&ctx, nullptr, &total32);
-	total = expected_size ? expected_size : total32;
-	led_downloading();
-	write_status("downloading", job_name, title_id, done, total, 0, "Downloading");
+	if(!total)
+		total = existing_size + total32;
+	g_last_done = done;
+	g_last_total = total;
+	led_download_progress(done, total);
+	write_status(existing_size ? "resuming" : "downloading",
+		job_name, title_id, done, total, 0,
+		existing_size ? "Resuming download" : "Downloading");
 
 	for(;;)
 	{
@@ -450,6 +538,9 @@ Result download_job(const char *job_name, const char *url, const char *title_id,
 				goto out;
 			}
 			done += chunk;
+			g_last_done = done;
+			g_last_total = total;
+			led_download_progress(done, total);
 			write_status("downloading", job_name, title_id, done, total, 0, "Downloading");
 		}
 
@@ -479,8 +570,6 @@ out:
 
 	if(R_SUCCEEDED(res))
 		res = rename_path(part_path, final_path);
-	if(R_FAILED(res))
-		delete_path(part_path);
 	httpcExit();
 	return res;
 }
@@ -532,8 +621,8 @@ void write_job_status()
 						static_cast<unsigned long>(g_last_http_status));
 				else
 					snprintf(message, sizeof(message), "Download failed");
-				write_status("download_failed", job_name, title_id, 0,
-					parse_u64(size_text), download_res, message);
+				write_status("download_failed", job_name, title_id, g_last_done,
+					g_last_total ? g_last_total : parse_u64(size_text), download_res, message);
 				write_boot_marker("download_failed");
 				return;
 			}

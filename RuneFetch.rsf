@@ -80,6 +80,7 @@ AccessControlInfo:
 
   FileSystemAccess:
     - DirectSdmc
+    - CategorySystemApplication
 
 SystemControlInfo:
   SaveDataSize    : 0KB

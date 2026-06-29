@@ -18,13 +18,11 @@ static Result init_core_services(void)
 	if(R_FAILED(res))
 		return res;
 
-	res = archiveMountSdmc();
-	g_sdmc_mounted = R_SUCCEEDED(res);
-	if(R_FAILED(res))
-		return res;
-
 	rf_ensure_dirs();
 	rf_write_status("starting", NULL, 0, 0, 0, "RuneFetch starting");
+
+	res = archiveMountSdmc();
+	g_sdmc_mounted = R_SUCCEEDED(res);
 	return 0;
 }
 

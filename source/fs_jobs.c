@@ -49,7 +49,7 @@ Result rf_ensure_dirs(void)
 	mkdir(RF_CACHE_DIR, 0777);
 
 	FS_Archive archive;
-	Result res = FSUSER_OpenArchive(&archive, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""));
+	Result res = FSUSER_OpenArchive(&archive, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, NULL));
 	if(R_FAILED(res))
 		return res;
 
@@ -147,7 +147,7 @@ void rf_write_status(const char *state, const RfJob *job, u64 done, u64 total, R
 	if(len > 0)
 	{
 		FS_Archive archive;
-		if(R_SUCCEEDED(FSUSER_OpenArchive(&archive, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""))))
+		if(R_SUCCEEDED(FSUSER_OpenArchive(&archive, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, NULL))))
 		{
 			FSUSER_DeleteFile(archive, fsMakePath(PATH_ASCII, sd_path(RF_STATUS_PATH)));
 			FSUSER_CloseArchive(archive);
@@ -155,7 +155,7 @@ void rf_write_status(const char *state, const RfJob *job, u64 done, u64 total, R
 
 		Handle file = 0;
 		if(R_SUCCEEDED(FSUSER_OpenFileDirectly(&file, ARCHIVE_SDMC,
-			fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, sd_path(RF_STATUS_PATH)),
+			fsMakePath(PATH_EMPTY, NULL), fsMakePath(PATH_ASCII, sd_path(RF_STATUS_PATH)),
 			FS_OPEN_CREATE | FS_OPEN_WRITE, 0)))
 		{
 			u32 written = 0;

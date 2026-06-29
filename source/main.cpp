@@ -16,6 +16,7 @@ u32 g_last_led_bucket = 0xFFFFFFFF;
 u32 g_last_http_status = 0;
 u64 g_last_done = 0;
 u64 g_last_total = 0;
+const char *g_last_stage = "";
 
 void set_info_led(u8 red, u8 green, u8 blue, bool blink)
 {
@@ -645,11 +646,13 @@ Result stream_install_job(const char *job_name, const char *url, const char *tit
 	g_last_http_status = 0;
 	g_last_done = 0;
 	g_last_total = expected_size;
+	g_last_stage = "init";
 
 	httpcContext ctx {};
 	u32 status = 0;
 	u32 total32 = 0;
 	bool context_open = false;
+	bool http_ready = true;
 	Handle cia = 0;
 	bool cia_open = false;
 	u64 done = 0;
@@ -661,6 +664,7 @@ Result stream_install_job(const char *job_name, const char *url, const char *tit
 	write_status("install_stream_opening", job_name, title_id, 0, total, 0,
 		"Opening stream install");
 
+	g_last_stage = "http_open";
 	res = open_download_context(&ctx, url, 0, &status);
 	context_open = R_SUCCEEDED(res);
 	if(R_FAILED(res))
@@ -668,16 +672,19 @@ Result stream_install_job(const char *job_name, const char *url, const char *tit
 
 	if(status != 200)
 	{
+		g_last_stage = "http_status";
 		g_last_http_status = status;
 		res = MAKERESULT(RL_PERMANENT, RS_INVALIDSTATE, RM_APPLICATION, status & 0x3FF);
 		goto out;
 	}
 
+	g_last_stage = "http_size";
 	httpcGetDownloadSizeState(&ctx, nullptr, &total32);
 	if(!total)
 		total = total32;
 	g_last_total = total;
 
+	g_last_stage = "am_start";
 	res = AM_StartCiaInstall(MEDIATYPE_SD, &cia);
 	if(R_FAILED(res))
 		goto out;
@@ -692,6 +699,7 @@ receive_loop:
 		u32 before = 0;
 		u32 after = 0;
 		httpcGetDownloadSizeState(&ctx, &before, nullptr);
+		g_last_stage = "http_receive";
 		res = httpcReceiveDataTimeout(&ctx, g_http_buffer, sizeof(g_http_buffer),
 			10ULL * 1000ULL * 1000ULL * 1000ULL);
 		httpcGetDownloadSizeState(&ctx, &after, nullptr);
@@ -702,6 +710,7 @@ receive_loop:
 		if(chunk)
 		{
 			u32 written = 0;
+			g_last_stage = "am_write";
 			Result write_res = FSFILE_Write(cia, &written, done, g_http_buffer, chunk, 0);
 			if(R_FAILED(write_res) || written != chunk)
 			{
@@ -728,22 +737,38 @@ receive_loop:
 			continue;
 		if(R_FAILED(res))
 		{
-			if(done && done < total && reconnects < 4)
+			while(done && done < total && reconnects < 6)
 			{
 				++reconnects;
-				httpcCancelConnection(&ctx);
-				httpcCloseContext(&ctx);
+				if(context_open)
+				{
+					httpcCancelConnection(&ctx);
+					httpcCloseContext(&ctx);
+				}
 				context_open = false;
+				if(http_ready)
+				{
+					httpcExit();
+					http_ready = false;
+				}
 				write_status("install_reconnecting", job_name, title_id, done, total, res,
 					"HTTP reconnecting during install");
-				svcSleepThread(500LL * 1000LL * 1000LL);
+				svcSleepThread((500LL + 250LL * reconnects) * 1000LL * 1000LL);
 
+				g_last_stage = "http_reinit";
+				res = httpcInit(0);
+				if(R_FAILED(res))
+					continue;
+				http_ready = true;
+
+				g_last_stage = "http_reopen_range";
 				res = open_download_context(&ctx, url, done, &status);
 				context_open = R_SUCCEEDED(res);
 				if(R_FAILED(res))
-					goto out;
+					continue;
 				if(status != 206)
 				{
+					g_last_stage = "http_range_status";
 					g_last_http_status = status;
 					res = MAKERESULT(RL_PERMANENT, RS_INVALIDSTATE, RM_APPLICATION, status & 0x3FF);
 					goto out;
@@ -773,13 +798,20 @@ out:
 	if(cia_open)
 	{
 		if(R_FAILED(res))
+		{
+			g_last_stage = "am_cancel";
 			AM_CancelCIAInstall(cia);
+		}
 		else
+		{
+			g_last_stage = "am_finish";
 			res = AM_FinishCiaInstall(cia);
+		}
 		svcCloseHandle(cia);
 	}
 	amExit();
-	httpcExit();
+	if(http_ready)
+		httpcExit();
 	return res;
 }
 
@@ -834,7 +866,7 @@ void write_job_status()
 					snprintf(message, sizeof(message), "Job failed; HTTP status %lu",
 						static_cast<unsigned long>(g_last_http_status));
 				else
-					snprintf(message, sizeof(message), "Job failed");
+					snprintf(message, sizeof(message), "Job failed at %s", g_last_stage);
 				write_status(cache_only ? "download_failed" : "install_failed",
 					job_name, title_id, g_last_done,
 					g_last_total ? g_last_total : parse_u64(size_text), job_res, message);

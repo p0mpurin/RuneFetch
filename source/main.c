@@ -8,18 +8,29 @@ static void idle_sleep(void)
 	svcSleepThread(1000ULL * 1000ULL * 1000ULL);
 }
 
-static Result init_services(void)
+static bool g_led_available;
+
+static Result init_core_services(void)
 {
 	Result res = fsInit();
-	if(R_FAILED(res)) return res;
+	if(R_FAILED(res))
+		return res;
 
-	res = acInit();
+	rf_ensure_dirs();
+	rf_write_status("starting", NULL, 0, 0, 0, "RuneFetch starting");
+	return 0;
+}
+
+static Result init_download_services(void)
+{
+	Result res = acInit();
 	if(R_FAILED(res)) return res;
 
 	res = ptmuInit();
 	if(R_FAILED(res)) return res;
 
 	res = ptmSysmInit();
+	g_led_available = R_SUCCEEDED(res);
 	if(R_FAILED(res)) return res;
 
 	res = httpcInit(512 * 1024);
@@ -29,7 +40,8 @@ static Result init_services(void)
 static void exit_services(void)
 {
 	httpcExit();
-	ptmSysmExit();
+	if(g_led_available)
+		ptmSysmExit();
 	ptmuExit();
 	acExit();
 	fsExit();
@@ -40,14 +52,21 @@ int main(int argc, char **argv)
 	(void)argc;
 	(void)argv;
 
-	Result res = init_services();
+	Result res = init_core_services();
 	if(R_FAILED(res))
 	{
 		for(;;) idle_sleep();
 	}
 
-	rf_ensure_dirs();
-	rf_led_init();
+	res = init_download_services();
+	if(R_FAILED(res))
+	{
+		rf_write_status("failed", NULL, 0, 0, res, "Service initialization failed");
+		for(;;) idle_sleep();
+	}
+
+	if(g_led_available)
+		rf_led_init();
 	rf_write_status("idle", NULL, 0, 0, 0, "Waiting for jobs");
 
 	for(;;)
@@ -67,7 +86,8 @@ int main(int argc, char **argv)
 				MAKERESULT(RL_PERMANENT, RS_INVALIDARG, RM_APPLICATION, 7),
 				"Invalid job");
 			rf_move_job(job_name, false);
-			rf_led_error();
+			if(g_led_available)
+				rf_led_error();
 			continue;
 		}
 
@@ -79,13 +99,15 @@ int main(int argc, char **argv)
 		{
 			rf_write_status("ready", &job, job.size, job.size, 0, "CIA ready");
 			rf_move_job(job_name, true);
-			rf_led_ready();
+			if(g_led_available)
+				rf_led_ready();
 		}
 		else
 		{
 			rf_write_status("failed", &job, 0, job.size, res, "Download failed");
 			rf_move_job(job_name, false);
-			rf_led_error();
+			if(g_led_available)
+				rf_led_error();
 		}
 	}
 

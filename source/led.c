@@ -13,10 +13,15 @@ typedef struct {
 	(((delay) & 0xFF) | (((smoothing) & 0xFF) << 8) | (((loop_delay) & 0xFF) << 16))
 
 static bool g_led_failed;
+static bool g_led_ready;
 static int g_last_step = -1;
 
 static Result set_pattern(RfLedPattern *pattern)
 {
+	Handle *session = ptmSysmGetSessionHandle();
+	if(!g_led_ready || !session || *session == 0)
+		return MAKERESULT(RL_PERMANENT, RS_NOTFOUND, RM_APPLICATION, 8);
+
 	u32 *cmdbuf = getThreadCommandBuffer();
 	cmdbuf[0] = 0x08010640;
 	cmdbuf[1] = pattern->animation;
@@ -65,6 +70,7 @@ static void blink(u8 r, u8 g, u8 b)
 void rf_led_init(void)
 {
 	g_led_failed = false;
+	g_led_ready = true;
 	g_last_step = -1;
 	rf_led_off();
 }

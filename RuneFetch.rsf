@@ -15,7 +15,7 @@ Option:
   FreeProductCode   : true
   MediaFootPadding  : false
   EnableCrypt       : false
-  EnableCompress    : true
+  EnableCompress    : false
 
 AccessControlInfo:
   IdealProcessor   : 1
@@ -30,10 +30,10 @@ AccessControlInfo:
   CanShareDeviceMemory : false
   RunnableOnSleep  : true
   SpecialMemoryArrange : false
-  ResourceLimitCategory : Other
+  ResourceLimitCategory : sysapplet
   CoreVersion      : 2
   DescVersion      : 2
-  MemoryType       : Base
+  MemoryType       : System
   HandleTableSize  : 64
 
   SystemCallAccess:
@@ -76,7 +76,11 @@ AccessControlInfo:
     - http:C
     - ssl:C
     - ptm:u
-    - ptm:s
+    - ptm:sysm
+    - soc:U
+    - ndm:u
+    - nwm::EXT
+    - mcu::HWC
 
   FileSystemAccess:
     - DirectSdmc
@@ -90,4 +94,9 @@ SystemControlInfo:
   Dependency:
     ac:     0x0004013000002402
     http:   0x0004013000002902
+    mcu:    0x0004013000001f02
+    ndm:    0x0004013000002b02
+    nwm:    0x0004013000002d02
+    socket: 0x0004013000002e02
     ssl:    0x0004013000002f02
+    ptm:    0x0004013000002202

@@ -3,6 +3,9 @@
 #include <3ds.h>
 #include <string.h>
 
+u32 __ctru_heap_size = 0x80000;
+u32 __ctru_linear_heap_size = 0x1000;
+
 void __appInit(void)
 {
 	srvInit();

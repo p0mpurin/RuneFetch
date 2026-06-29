@@ -72,6 +72,8 @@ AccessControlInfo:
 
   ServiceAccessControl:
     - fs:USER
+    - http:C
+    - ssl:C
 
   FileSystemAccess:
     - DirectSdmc
@@ -83,3 +85,5 @@ SystemControlInfo:
   RemasterVersion : 0
   StackSize       : 0x4000
   Dependency:
+    http: 0x0004013000002902
+    ssl:  0x0004013000002f02

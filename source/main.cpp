@@ -10,6 +10,7 @@ constexpr const char *RUNE3DS_USER_AGENT = "hShop (3DS/CTR/KTR; ARMv6) 3hs/1.5.4
 constexpr u64 STATUS_UPDATE_STEP = 0x40000;
 constexpr u64 FILE_FLUSH_STEP = 0x100000;
 constexpr u64 STREAM_INSTALL_STATUS_STEP = 0x80000;
+constexpr u32 HTTP_SHARED_MEMORY_SIZE = 1024 * 1024;
 
 bool g_led_ready = false;
 u32 g_last_led_bucket = 0xFFFFFFFF;
@@ -17,6 +18,14 @@ u32 g_last_http_status = 0;
 u64 g_last_done = 0;
 u64 g_last_total = 0;
 const char *g_last_stage = "";
+
+Result init_http()
+{
+	Result res = httpcInit(HTTP_SHARED_MEMORY_SIZE);
+	if(R_FAILED(res))
+		res = httpcInit(0);
+	return res;
+}
 
 void set_info_led(u8 red, u8 green, u8 blue, bool blink)
 {
@@ -435,7 +444,7 @@ Result open_download_context(httpcContext *ctx, const char *url, u64 resume_offs
 Result download_job(const char *job_name, const char *url, const char *title_id,
 	const char *id, u64 expected_size)
 {
-	Result res = httpcInit(0);
+	Result res = init_http();
 	if(R_FAILED(res))
 		return res;
 	g_last_http_status = 0;
@@ -632,7 +641,7 @@ out:
 Result stream_install_job(const char *job_name, const char *url, const char *title_id,
 	u64 expected_size)
 {
-	Result res = httpcInit(0);
+	Result res = init_http();
 	if(R_FAILED(res))
 		return res;
 
@@ -658,6 +667,7 @@ Result stream_install_job(const char *job_name, const char *url, const char *tit
 	u64 done = 0;
 	u64 total = expected_size;
 	u64 last_status_done = 0;
+	u32 context_pos = 0;
 	u32 reconnects = 0;
 
 	led_downloading();
@@ -694,19 +704,38 @@ Result stream_install_job(const char *job_name, const char *url, const char *tit
 		"Downloading and installing");
 
 receive_loop:
+	context_pos = 0;
 	for(;;)
 	{
-		u32 before = 0;
-		u32 after = 0;
-		httpcGetDownloadSizeState(&ctx, &before, nullptr);
-		g_last_stage = "http_receive";
-		res = httpcReceiveDataTimeout(&ctx, g_http_buffer, sizeof(g_http_buffer),
-			10ULL * 1000ULL * 1000ULL * 1000ULL);
-		httpcGetDownloadSizeState(&ctx, &after, nullptr);
+		if(total && done >= total)
+		{
+			res = 0;
+			break;
+		}
 
-		u32 chunk = after >= before ? after - before : 0;
-		if(chunk > sizeof(g_http_buffer))
-			chunk = sizeof(g_http_buffer);
+		u32 request_size = sizeof(g_http_buffer);
+		if(total && total - done < request_size)
+			request_size = static_cast<u32>(total - done);
+
+		g_last_stage = "http_receive";
+		res = httpcReceiveDataTimeout(&ctx, g_http_buffer, request_size,
+			10ULL * 1000ULL * 1000ULL * 1000ULL);
+
+		u32 pos = context_pos;
+		Result progress_res = httpcGetDownloadSizeState(&ctx, &pos, nullptr);
+		if(R_FAILED(progress_res))
+			res = progress_res;
+		else if(pos < context_pos)
+			res = MAKERESULT(RL_PERMANENT, RS_INVALIDSTATE, RM_HTTP, 73);
+		else if(total && done + (pos - context_pos) >= total
+			&& R_FAILED(res) && res != static_cast<Result>(HTTPC_RESULTCODE_DOWNLOADPENDING))
+		{
+			res = 0;
+		}
+
+		u32 chunk = pos >= context_pos ? pos - context_pos : 0;
+		if(chunk > request_size)
+			chunk = request_size;
 		if(chunk)
 		{
 			u32 written = 0;
@@ -720,6 +749,7 @@ receive_loop:
 			}
 
 			done += chunk;
+			context_pos += chunk;
 			g_last_done = done;
 			g_last_total = total;
 			led_download_progress(done, total);
@@ -733,6 +763,8 @@ receive_loop:
 			svcSleepThread(2LL * 1000LL * 1000LL);
 		}
 
+		if(chunk == 0 && res == static_cast<Result>(HTTPC_RESULTCODE_DOWNLOADPENDING))
+			continue;
 		if(res == static_cast<Result>(HTTPC_RESULTCODE_DOWNLOADPENDING))
 			continue;
 		if(R_FAILED(res))
@@ -756,7 +788,7 @@ receive_loop:
 				svcSleepThread((500LL + 250LL * reconnects) * 1000LL * 1000LL);
 
 				g_last_stage = "http_reinit";
-				res = httpcInit(0);
+				res = init_http();
 				if(R_FAILED(res))
 					continue;
 				http_ready = true;

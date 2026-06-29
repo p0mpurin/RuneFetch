@@ -3,8 +3,23 @@
 #include <3ds.h>
 #include <string.h>
 
-u32 __ctru_heap_size = 0x10000;
-u32 __ctru_linear_heap_size = 0x1000;
+static u8 g_static_heap[0x10000] __attribute__((aligned(8)));
+
+u32 __ctru_heap_size = sizeof(g_static_heap);
+u32 __ctru_linear_heap_size = 0;
+
+void __system_allocateHeaps(void)
+{
+	extern char *fake_heap_start;
+	extern char *fake_heap_end;
+	extern u32 __ctru_heap;
+	extern u32 __ctru_linear_heap;
+
+	__ctru_heap = (u32)g_static_heap;
+	__ctru_linear_heap = 0;
+	fake_heap_start = (char *)g_static_heap;
+	fake_heap_end = (char *)g_static_heap + sizeof(g_static_heap);
+}
 
 void __appInit(void)
 {

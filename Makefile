@@ -10,14 +10,13 @@ endif
 
 include $(DEVKITARM)/3ds_rules
 
-LD := $(CC)
 ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
-INCLUDE := -I$(CURDIR)/$(INCLUDES) -I$(CTRULIB)/include
-CFLAGS := -g -Wall -Wextra -O2 -mword-relocations -ffunction-sections $(ARCH)
+INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) -I$(CTRULIB)/include
+CFLAGS := -Wall -Wextra -Os -mword-relocations -ffunction-sections -fdata-sections $(ARCH)
 CFLAGS += $(INCLUDE)
-CXXFLAGS := $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++17
+CXXFLAGS := $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++14
 ASFLAGS := -g $(ARCH)
-LDFLAGS := -specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+LDFLAGS := -specs=3dsx.specs $(ARCH) -Wl,--gc-sections -Wl,-Map,$(notdir $*.map)
 LIBS := -lctru -lm
 LIBDIRS := $(CTRULIB)
 
@@ -25,6 +24,7 @@ ifneq ($(BUILD),$(notdir $(CURDIR)))
 export OUTPUT := $(CURDIR)/$(TARGET)
 export VPATH := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
 export DEPSDIR := $(CURDIR)/$(BUILD)
+export LD := $(CXX)
 
 CFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
@@ -43,7 +43,7 @@ $(BUILD):
 $(OUTPUT).elf: $(OFILES)
 
 $(OUTPUT).cxi: $(OUTPUT).elf RuneFetch.rsf
-	makerom -f ncch -rsf RuneFetch.rsf -nocodepadding -o $@ -elf $<
+	makerom -f ncch -rsf RuneFetch.rsf -o $@ -elf $< -target p -ignoresign
 	@cp $@ $(CURDIR)/$(TITLEID).cxi
 
 install: $(OUTPUT).cxi

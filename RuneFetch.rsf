@@ -72,19 +72,8 @@ AccessControlInfo:
 
   ServiceAccessControl:
     - fs:USER
-    - ac:u
-    - http:C
-    - ssl:C
-    - ptm:u
-    - ptm:sysm
-    - soc:U
-    - ndm:u
-    - nwm::EXT
-    - mcu::HWC
 
   FileSystemAccess:
-    - DirectSdmc
-    - DirectSdmcWrite
     - CategorySystemApplication
 
 SystemControlInfo:
@@ -92,11 +81,3 @@ SystemControlInfo:
   RemasterVersion : 0
   StackSize       : 0x4000
   Dependency:
-    ac:     0x0004013000002402
-    http:   0x0004013000002902
-    mcu:    0x0004013000001f02
-    ndm:    0x0004013000002b02
-    nwm:    0x0004013000002d02
-    socket: 0x0004013000002e02
-    ssl:    0x0004013000002f02
-    ptm:    0x0004013000002202

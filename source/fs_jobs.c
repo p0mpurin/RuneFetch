@@ -1,5 +1,6 @@
 #include "runefetch.h"
 
+#include <3ds.h>
 #include <dirent.h>
 #include <stdio.h>
 #include <string.h>
@@ -26,6 +27,16 @@ static void copy_value(char *dst, size_t dst_size, const char *src)
 	dst[dst_size - 1] = '\0';
 }
 
+static const char *sd_path(const char *path)
+{
+	return strncmp(path, "sdmc:", 5) == 0 ? path + 5 : path;
+}
+
+static void fs_create_dir(FS_Archive archive, const char *path)
+{
+	FSUSER_CreateDirectory(archive, fsMakePath(PATH_ASCII, sd_path(path)), 0);
+}
+
 Result rf_ensure_dirs(void)
 {
 	mkdir("sdmc:/3ds", 0777);
@@ -36,6 +47,21 @@ Result rf_ensure_dirs(void)
 	mkdir(RF_FAILED_DIR, 0777);
 	mkdir(RF_STATE_DIR, 0777);
 	mkdir(RF_CACHE_DIR, 0777);
+
+	FS_Archive archive;
+	Result res = FSUSER_OpenArchive(&archive, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""));
+	if(R_FAILED(res))
+		return res;
+
+	fs_create_dir(archive, "sdmc:/3ds");
+	fs_create_dir(archive, RF_BASE_DIR);
+	fs_create_dir(archive, RF_FETCH_DIR);
+	fs_create_dir(archive, RF_JOBS_DIR);
+	fs_create_dir(archive, RF_DONE_DIR);
+	fs_create_dir(archive, RF_FAILED_DIR);
+	fs_create_dir(archive, RF_STATE_DIR);
+	fs_create_dir(archive, RF_CACHE_DIR);
+	FSUSER_CloseArchive(archive);
 	return 0;
 }
 
@@ -109,6 +135,35 @@ Result rf_move_job(const char *job_name, bool success)
 
 void rf_write_status(const char *state, const RfJob *job, u64 done, u64 total, Result res, const char *message)
 {
+	char direct[640];
+	int len = snprintf(direct, sizeof(direct),
+		"state=%s\njob=%s\nid=%s\ntitle_id=%s\nname=%s\ndone=%llu\ntotal=%llu\nresult=%08lX\nmessage=%s\n",
+		state ? state : "unknown",
+		job ? job->job_name : "",
+		job ? job->id : "",
+		job ? job->title_id : "",
+		job ? job->name : "",
+		done, total, res, message ? message : "");
+	if(len > 0)
+	{
+		FS_Archive archive;
+		if(R_SUCCEEDED(FSUSER_OpenArchive(&archive, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""))))
+		{
+			FSUSER_DeleteFile(archive, fsMakePath(PATH_ASCII, sd_path(RF_STATUS_PATH)));
+			FSUSER_CloseArchive(archive);
+		}
+
+		Handle file = 0;
+		if(R_SUCCEEDED(FSUSER_OpenFileDirectly(&file, ARCHIVE_SDMC,
+			fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, sd_path(RF_STATUS_PATH)),
+			FS_OPEN_CREATE | FS_OPEN_WRITE, 0)))
+		{
+			u32 written = 0;
+			FSFILE_Write(file, &written, 0, direct, (u32)len, FS_WRITE_FLUSH);
+			FSFILE_Close(file);
+		}
+	}
+
 	FILE *f = fopen(RF_STATUS_PATH, "w");
 	if(!f) return;
 

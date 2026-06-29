@@ -996,10 +996,15 @@ int main()
 			init_led();
 			write_job_status();
 		}
+
+		if(g_led_ready)
+		{
+			mcuHwcExit();
+			g_led_ready = false;
+		}
+		write_boot_marker("exit");
+		fsExit();
 	}
 
-	for(;;)
-	{
-		svcSleepThread(1000LL * 1000LL * 1000LL);
-	}
+	return 0;
 }

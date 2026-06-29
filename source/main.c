@@ -1,7 +1,6 @@
 #include "runefetch.h"
 
 #include <3ds.h>
-#include <3ds/archive.h>
 #include <string.h>
 
 static void idle_sleep(void)
@@ -11,15 +10,12 @@ static void idle_sleep(void)
 
 static void startup_fail(u8 stage)
 {
+	(void)stage;
 	for(;;)
 	{
-		rf_led_stage(stage);
 		svcSleepThread(600ULL * 1000ULL * 1000ULL);
 	}
 }
-
-static bool g_led_available;
-static bool g_sdmc_mounted;
 
 static Result init_core_services(void)
 {
@@ -35,40 +31,7 @@ static Result init_core_services(void)
 	rf_write_status("starting", NULL, 0, 0, 0, "RuneFetch starting");
 	rf_write_boot_marker("status", 0);
 
-	res = archiveMountSdmc();
-	g_sdmc_mounted = R_SUCCEEDED(res);
-	rf_write_boot_marker(g_sdmc_mounted ? "archive_mount_ok" : "archive_mount_failed", res);
 	return 0;
-}
-
-static Result init_download_services(void)
-{
-	Result res = acInit();
-	if(R_FAILED(res)) return res;
-	rf_led_stage(6);
-
-	res = ptmuInit();
-	if(R_FAILED(res)) return res;
-
-	res = ptmSysmInit();
-	g_led_available = R_SUCCEEDED(res);
-	if(g_led_available)
-		rf_led_init();
-
-	res = httpcInit(512 * 1024);
-	return res;
-}
-
-static void exit_services(void)
-{
-	httpcExit();
-	if(g_led_available)
-		ptmSysmExit();
-	ptmuExit();
-	acExit();
-	if(g_sdmc_mounted)
-		archiveUnmount("sdmc:");
-	fsExit();
 }
 
 int main(int argc, char **argv)
@@ -82,57 +45,11 @@ int main(int argc, char **argv)
 		startup_fail(10);
 	}
 
-	res = init_download_services();
-	if(R_FAILED(res))
-	{
-		rf_write_status("failed", NULL, 0, 0, res, "Service initialization failed");
-		startup_fail(11);
-	}
-
-	rf_write_status("idle", NULL, 0, 0, 0, "Waiting for jobs");
+	rf_write_status("probe", NULL, 0, 0, 0, "RuneFetch boot probe alive");
+	rf_write_boot_marker("probe_alive", 0);
 
 	for(;;)
 	{
-		char job_name[RF_MAX_NAME];
-		if(!rf_find_next_job(job_name, sizeof(job_name)))
-		{
-			rf_write_status("idle", NULL, 0, 0, 0, "Waiting for jobs");
-			idle_sleep();
-			continue;
-		}
-
-		RfJob job;
-		if(!rf_load_job(job_name, &job))
-		{
-			rf_write_status("failed", NULL, 0, 0,
-				MAKERESULT(RL_PERMANENT, RS_INVALIDARG, RM_APPLICATION, 7),
-				"Invalid job");
-			rf_move_job(job_name, false);
-			if(g_led_available)
-				rf_led_error();
-			continue;
-		}
-
-		rf_write_status("downloading", &job, 0, job.size, 0, "Starting");
-
-		acWaitInternetConnection();
-		res = rf_download_job(&job);
-		if(R_SUCCEEDED(res))
-		{
-			rf_write_status("ready", &job, job.size, job.size, 0, "CIA ready");
-			rf_move_job(job_name, true);
-			if(g_led_available)
-				rf_led_ready();
-		}
-		else
-		{
-			rf_write_status("failed", &job, 0, job.size, res, "Download failed");
-			rf_move_job(job_name, false);
-			if(g_led_available)
-				rf_led_error();
-		}
+		idle_sleep();
 	}
-
-	exit_services();
-	return 0;
 }

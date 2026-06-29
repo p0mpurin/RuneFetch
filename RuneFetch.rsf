@@ -21,7 +21,7 @@ AccessControlInfo:
   IdealProcessor   : 1
   AffinityMask     : 2
   Priority         : 28
-  DisableDebug     : false
+  DisableDebug     : true
   EnableForceDebug : false
   CanWriteSharedPage : false
   CanUsePrivilegedPriority : false

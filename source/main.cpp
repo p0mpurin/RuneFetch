@@ -3,10 +3,12 @@
 #include <cstring>
 
 namespace {
-alignas(8) u8 g_static_heap[0x10000];
-alignas(0x1000) u8 g_http_buffer[0x4000];
+alignas(8) u8 g_static_heap[0x20000];
+alignas(0x1000) u8 g_http_buffer[0x10000];
 
 constexpr const char *RUNE3DS_USER_AGENT = "hShop (3DS/CTR/KTR; ARMv6) 3hs/1.5.42";
+constexpr u64 STATUS_UPDATE_STEP = 0x40000;
+constexpr u64 FILE_FLUSH_STEP = 0x100000;
 
 bool g_led_ready = false;
 u32 g_last_led_bucket = 0xFFFFFFFF;
@@ -461,6 +463,8 @@ Result download_job(const char *job_name, const char *url, const char *title_id,
 	u32 total32 = 0;
 	u64 total = expected_size;
 	u64 done = existing_size;
+	u64 last_status_done = done;
+	u64 last_flush_done = done;
 	bool context_open = false;
 	u32 expected_status = existing_size ? 206 : 200;
 	g_last_done = done;
@@ -532,7 +536,7 @@ Result download_job(const char *job_name, const char *url, const char *title_id,
 		{
 			u32 written = 0;
 			Result write_res = FSFILE_Write(out, &written, done, g_http_buffer,
-				chunk, FS_WRITE_FLUSH);
+				chunk, 0);
 			if(R_FAILED(write_res) || written != chunk)
 			{
 				res = R_FAILED(write_res) ? write_res :
@@ -543,7 +547,21 @@ Result download_job(const char *job_name, const char *url, const char *title_id,
 			g_last_done = done;
 			g_last_total = total;
 			led_download_progress(done, total);
-			write_status("downloading", job_name, title_id, done, total, 0, "Downloading");
+			if(done - last_flush_done >= FILE_FLUSH_STEP)
+			{
+				write_res = FSFILE_Flush(out);
+				if(R_FAILED(write_res))
+				{
+					res = write_res;
+					goto out;
+				}
+				last_flush_done = done;
+			}
+			if(done - last_status_done >= STATUS_UPDATE_STEP || (total && done >= total))
+			{
+				write_status("downloading", job_name, title_id, done, total, 0, "Downloading");
+				last_status_done = done;
+			}
 		}
 
 		if(res == static_cast<Result>(HTTPC_RESULTCODE_DOWNLOADPENDING))
@@ -567,6 +585,12 @@ out:
 		if(R_FAILED(res))
 			httpcCancelConnection(&ctx);
 		httpcCloseContext(&ctx);
+	}
+	if(R_SUCCEEDED(res))
+	{
+		Result flush_res = FSFILE_Flush(out);
+		if(R_FAILED(flush_res))
+			res = flush_res;
 	}
 	FSFILE_Close(out);
 

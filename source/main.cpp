@@ -34,6 +34,23 @@ void __appExit(void)
 
 int main()
 {
+	Result res = fsInit();
+	if(R_SUCCEEDED(res))
+	{
+		static const char data[] = "stage=fsInit\nresult=00000000\n";
+		Handle file = 0;
+		Result open_res = FSUSER_OpenFileDirectly(&file, ARCHIVE_SDMC,
+			fsMakePath(PATH_EMPTY, nullptr),
+			fsMakePath(PATH_ASCII, "/runefetch_boot.txt"),
+			FS_OPEN_CREATE | FS_OPEN_WRITE, 0);
+		if(R_SUCCEEDED(open_res))
+		{
+			u32 written = 0;
+			FSFILE_Write(file, &written, 0, data, sizeof(data) - 1, FS_WRITE_FLUSH);
+			FSFILE_Close(file);
+		}
+	}
+
 	for(;;)
 	{
 		svcSleepThread(1000LL * 1000LL * 1000LL);

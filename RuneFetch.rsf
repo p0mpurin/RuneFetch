@@ -74,6 +74,8 @@ AccessControlInfo:
     - fs:USER
 
   FileSystemAccess:
+    - DirectSdmc
+    - DirectSdmcWrite
     - CategorySystemApplication
 
 SystemControlInfo:

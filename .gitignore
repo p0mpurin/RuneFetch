@@ -1,0 +1,11 @@
+build/
+*.elf
+*.cxi
+*.3dsx
+*.smdh
+*.map
+*.lst
+*.o
+*.d
+*.su
+*.bak

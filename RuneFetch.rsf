@@ -1,0 +1,91 @@
+BasicInfo:
+  Title        : RuneFetch
+  CompanyCode  : "00"
+  ProductCode  : RUNEFETCH
+  ContentType  : Application
+  Logo         : None
+
+TitleInfo:
+  UniqueId     : 0xC0FE
+  Category     : Base
+  Version      : 1
+
+Option:
+  UseOnSD           : false
+  FreeProductCode   : true
+  MediaFootPadding  : false
+  EnableCrypt       : false
+  EnableCompress    : true
+
+AccessControlInfo:
+  IdealProcessor   : 1
+  AffinityMask     : 2
+  Priority         : 28
+  DisableDebug     : false
+  EnableForceDebug : false
+  CanWriteSharedPage : false
+  CanUsePrivilegedPriority : false
+  CanUseNonAlphabetAndNumber : false
+  PermitMainFunctionArgument : false
+  CanShareDeviceMemory : false
+  RunnableOnSleep  : true
+  SpecialMemoryArrange : false
+  ResourceLimitCategory : Other
+  CoreVersion      : 2
+  DescVersion      : 2
+  MemoryType       : Base
+  HandleTableSize  : 64
+
+  SystemCallAccess:
+    ControlMemory:          0x01
+    QueryMemory:            0x02
+    ExitProcess:            0x03
+    CreateThread:           0x08
+    ExitThread:             0x09
+    SleepThread:            0x0A
+    GetThreadPriority:      0x0B
+    SetThreadPriority:      0x0C
+    CreateMutex:            0x13
+    ReleaseMutex:           0x14
+    CreateEvent:            0x17
+    SignalEvent:            0x18
+    ClearEvent:             0x19
+    CreateMemoryBlock:      0x1E
+    MapMemoryBlock:         0x1F
+    UnmapMemoryBlock:       0x20
+    CloseHandle:            0x23
+    WaitSynchronization1:   0x24
+    WaitSynchronizationN:   0x25
+    DuplicateHandle:        0x27
+    GetSystemTick:          0x28
+    ConnectToPort:          0x2D
+    SendSyncRequest:        0x32
+    GetProcessId:           0x35
+    GetThreadId:            0x37
+    GetResourceLimit:       0x38
+    Break:                  0x3C
+    OutputDebugString:      0x3D
+    CreatePort:             0x47
+    CreateSessionToPort:    0x48
+    AcceptSession:          0x4A
+    ReplyAndReceive:        0x4F
+
+  ServiceAccessControl:
+    - fs:USER
+    - ac:u
+    - http:C
+    - ssl:C
+    - ptm:u
+    - ptm:s
+
+  FileSystemAccess:
+    - DirectSdmc
+
+SystemControlInfo:
+  SaveDataSize    : 0KB
+  RemasterVersion : 0
+  StackSize       : 0x8000
+  Dependency:
+    ac:     0x0004013000002402
+    http:   0x0004013000002902
+    ssl:    0x0004013000002f02

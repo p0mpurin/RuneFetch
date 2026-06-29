@@ -5,14 +5,15 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define RF_BASE_DIR       "/3ds/Rune3DS"
-#define RF_FETCH_DIR      "/3ds/Rune3DS/runefetch"
-#define RF_JOBS_DIR       "/3ds/Rune3DS/runefetch/jobs"
-#define RF_DONE_DIR       "/3ds/Rune3DS/runefetch/done"
-#define RF_FAILED_DIR     "/3ds/Rune3DS/runefetch/failed"
-#define RF_STATE_DIR      "/3ds/Rune3DS/runefetch/state"
-#define RF_STATUS_PATH    "/3ds/Rune3DS/runefetch/state/status.txt"
-#define RF_CACHE_DIR      "/3ds/Rune3DS/cache"
+#define RF_SD_ROOT        "sdmc:"
+#define RF_BASE_DIR       "sdmc:/3ds/Rune3DS"
+#define RF_FETCH_DIR      "sdmc:/3ds/Rune3DS/runefetch"
+#define RF_JOBS_DIR       "sdmc:/3ds/Rune3DS/runefetch/jobs"
+#define RF_DONE_DIR       "sdmc:/3ds/Rune3DS/runefetch/done"
+#define RF_FAILED_DIR     "sdmc:/3ds/Rune3DS/runefetch/failed"
+#define RF_STATE_DIR      "sdmc:/3ds/Rune3DS/runefetch/state"
+#define RF_STATUS_PATH    "sdmc:/3ds/Rune3DS/runefetch/state/status.txt"
+#define RF_CACHE_DIR      "sdmc:/3ds/Rune3DS/cache"
 
 #define RF_MAX_PATH       256
 #define RF_MAX_URL        1024

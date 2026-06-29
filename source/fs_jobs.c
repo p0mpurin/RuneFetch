@@ -28,7 +28,7 @@ static void copy_value(char *dst, size_t dst_size, const char *src)
 
 Result rf_ensure_dirs(void)
 {
-	mkdir("/3ds", 0777);
+	mkdir("sdmc:/3ds", 0777);
 	mkdir(RF_BASE_DIR, 0777);
 	mkdir(RF_FETCH_DIR, 0777);
 	mkdir(RF_JOBS_DIR, 0777);

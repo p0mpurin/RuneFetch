@@ -3,6 +3,16 @@
 #include <3ds.h>
 #include <string.h>
 
+void __appInit(void)
+{
+	srvInit();
+}
+
+void __appExit(void)
+{
+	srvExit();
+}
+
 static void idle_sleep(void)
 {
 	svcSleepThread(1000ULL * 1000ULL * 1000ULL);

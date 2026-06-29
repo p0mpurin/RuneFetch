@@ -52,7 +52,7 @@ void led_idle()
 
 void led_downloading()
 {
-	set_info_led(0, 0, 0xFF, true);
+	set_info_led(0, 0, 0xFF, false);
 	g_last_led_bucket = 0;
 }
 
@@ -70,7 +70,7 @@ void led_download_progress(u64 done, u64 total)
 	g_last_led_bucket = bucket;
 	u8 green = static_cast<u8>((bucket * 255) / 20);
 	u8 blue = static_cast<u8>(255 - green);
-	set_info_led(0, green, blue, true);
+	set_info_led(0, green, blue, false);
 }
 
 void led_ready()
@@ -80,7 +80,7 @@ void led_ready()
 
 void led_error()
 {
-	set_info_led(0xFF, 0, 0, true);
+	set_info_led(0xFF, 0, 0, false);
 }
 
 void write_file(const char *path, const char *data, u32 size)

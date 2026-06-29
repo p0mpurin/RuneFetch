@@ -138,6 +138,21 @@ bool read_job(const char *job_name, char *out, u32 out_size)
 	return true;
 }
 
+bool delete_job(const char *job_name)
+{
+	char path[256];
+	snprintf(path, sizeof(path), "/3ds/Rune3DS/runefetch/jobs/%s", job_name);
+
+	FS_Archive archive;
+	Result res = FSUSER_OpenArchive(&archive, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, nullptr));
+	if(R_FAILED(res))
+		return false;
+
+	res = FSUSER_DeleteFile(archive, fsMakePath(PATH_ASCII, path));
+	FSUSER_CloseArchive(archive);
+	return R_SUCCEEDED(res);
+}
+
 void copy_field(const char *text, const char *key, char *out, u32 out_size)
 {
 	if(out_size == 0)
@@ -183,11 +198,13 @@ void write_job_status()
 	char title_id[32];
 	char url[8];
 	bool loaded = read_job(job_name, job_text, sizeof(job_text));
+	bool deleted = false;
 	if(loaded)
 	{
 		copy_field(job_text, "id", id, sizeof(id));
 		copy_field(job_text, "title_id", title_id, sizeof(title_id));
 		copy_field(job_text, "url", url, sizeof(url));
+		deleted = delete_job(job_name);
 	}
 	else
 	{
@@ -203,17 +220,19 @@ void write_job_status()
 		"id=%s\n"
 		"title_id=%s\n"
 		"url=%s\n"
+		"deleted=%s\n"
 		"result=00000000\n"
-		"message=RuneFetch saw queued job\n",
-		loaded ? "job_found" : "job_read_failed",
+		"message=RuneFetch consumed queued job\n",
+		loaded ? (deleted ? "job_consumed" : "job_delete_failed") : "job_read_failed",
 		job_name,
 		id,
 		title_id,
-		url[0] ? "yes" : "no");
+		url[0] ? "yes" : "no",
+		deleted ? "yes" : "no");
 	if(len > 0)
 		write_file("/3ds/Rune3DS/runefetch/state/status.txt",
 			status, static_cast<u32>(len));
-	write_boot_marker(loaded ? "job_found" : "job_read_failed");
+	write_boot_marker(loaded ? (deleted ? "job_consumed" : "job_delete_failed") : "job_read_failed");
 }
 }
 

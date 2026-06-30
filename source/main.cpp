@@ -6,7 +6,7 @@ namespace {
 alignas(8) u8 g_static_heap[0x20000];
 alignas(0x1000) u8 g_http_buffer[0x10000];
 
-constexpr const char *RUNE3DS_USER_AGENT = "hShop (3DS/CTR/KTR; ARMv6) 3hs/1.5.42";
+constexpr const char *RUNE3DS_USER_AGENT = "hShop (3DS/CTR/KTR; ARMv6) 3hs/1.5.44";
 constexpr u64 STATUS_UPDATE_STEP = 0x40000;
 constexpr u64 FILE_FLUSH_STEP = 0x100000;
 constexpr u64 STREAM_INSTALL_STATUS_STEP = 0x80000;
@@ -304,7 +304,7 @@ bool delete_cancel_marker(const char *job_name)
 	return R_SUCCEEDED(res);
 }
 
-bool cancel_requested(const char *job_name)
+bool cancel_marker_exists(const char *job_name)
 {
 	char path[256];
 	snprintf(path, sizeof(path), "/3ds/Rune3DS/runefetch/cancel/%s", job_name);
@@ -321,6 +321,14 @@ bool cancel_requested(const char *job_name)
 		return false;
 
 	FSFILE_Close(file);
+	return true;
+}
+
+bool cancel_requested(const char *job_name)
+{
+	if(!cancel_marker_exists(job_name))
+		return false;
+
 	g_job_canceled = true;
 	g_last_stage = "cancel_requested";
 	led_idle();
@@ -725,34 +733,35 @@ Result stream_install_job(const char *job_name, const char *url, const char *tit
 	u64 last_status_done = 0;
 	u32 context_pos = 0;
 	u32 reconnects = 0;
-	bool late_cancel_ignored = false;
+	bool stream_cancel_ignored = false;
 
-	auto cancel_too_late = [&]() -> bool {
+	auto near_end = [&]() -> bool {
 		return total && done + STREAM_LATE_CANCEL_WINDOW >= total;
 	};
 
 	auto check_cancel = [&]() -> bool {
-		if(late_cancel_ignored)
-			return false;
 		if(!cancel_requested(job_name))
 			return false;
-
-		if(cancel_too_late())
-		{
-			g_job_canceled = false;
-			g_last_stage = "cancel_too_late";
-			late_cancel_ignored = true;
-			delete_cancel_marker(job_name);
-			led_download_progress(done, total);
-			write_status("install_finishing", job_name, title_id, done, total, 0,
-				"Cancel requested too late; finishing install");
-			return false;
-		}
 
 		led_idle();
 		write_status("canceling", job_name, title_id, done, total, RESULT_CANCELED,
 			"Canceling RuneFetch job");
 		return true;
+	};
+
+	auto ignore_stream_cancel = [&]() {
+		if(!cancel_marker_exists(job_name))
+			return;
+
+		delete_cancel_marker(job_name);
+		if(!stream_cancel_ignored)
+		{
+			stream_cancel_ignored = true;
+			g_last_stage = "stream_cancel_ignored";
+			led_download_progress(done, total);
+			write_status("installing", job_name, title_id, done, total, 0,
+				"Stream install cannot be canceled after AM starts");
+		}
 	};
 
 	led_downloading();
@@ -779,6 +788,12 @@ Result stream_install_job(const char *job_name, const char *url, const char *tit
 		total = total32;
 	g_last_total = total;
 
+	if(check_cancel())
+	{
+		res = RESULT_CANCELED;
+		goto out;
+	}
+
 	g_last_stage = "am_start";
 	res = AM_StartCiaInstall(MEDIATYPE_SD, &cia);
 	if(R_FAILED(res))
@@ -792,11 +807,7 @@ receive_loop:
 	context_pos = 0;
 	for(;;)
 	{
-		if(check_cancel())
-		{
-			res = RESULT_CANCELED;
-			goto out;
-		}
+		ignore_stream_cancel();
 
 		if(total && done >= total)
 		{
@@ -829,11 +840,7 @@ receive_loop:
 			chunk = request_size;
 		if(chunk)
 		{
-			if(check_cancel())
-			{
-				res = RESULT_CANCELED;
-				goto out;
-			}
+			ignore_stream_cancel();
 
 			u32 written = 0;
 			g_last_stage = "am_write";
@@ -859,11 +866,7 @@ receive_loop:
 
 			svcSleepThread(2LL * 1000LL * 1000LL);
 
-			if(check_cancel())
-			{
-				res = RESULT_CANCELED;
-				goto out;
-			}
+			ignore_stream_cancel();
 		}
 
 		if(chunk == 0 && res == static_cast<Result>(HTTPC_RESULTCODE_DOWNLOADPENDING))
@@ -872,16 +875,12 @@ receive_loop:
 			continue;
 		if(R_FAILED(res))
 		{
-			u32 max_reconnects = cancel_too_late()
+			u32 max_reconnects = near_end()
 				? STREAM_LATE_RECONNECT_MAX
 				: STREAM_RECONNECT_MAX;
 			while(done && done < total && reconnects < max_reconnects)
 			{
-				if(check_cancel())
-				{
-					res = RESULT_CANCELED;
-					goto out;
-				}
+				ignore_stream_cancel();
 
 				++reconnects;
 				if(context_open)
@@ -918,7 +917,7 @@ receive_loop:
 					g_last_stage = "http_range_status";
 					g_last_http_status = status;
 					res = MAKERESULT(RL_PERMANENT, RS_INVALIDSTATE, RM_APPLICATION, status & 0x3FF);
-					if(cancel_too_late())
+					if(near_end())
 					{
 						httpcCloseContext(&ctx);
 						context_open = false;
@@ -950,8 +949,6 @@ out:
 	}
 	if(cia_open)
 	{
-		if(R_SUCCEEDED(res) && check_cancel())
-			res = RESULT_CANCELED;
 		if(R_FAILED(res))
 		{
 			g_last_stage = "am_cancel";

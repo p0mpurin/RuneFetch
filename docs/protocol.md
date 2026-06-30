@@ -100,14 +100,16 @@ Common states:
 - `install_failed`
 - `canceled`
 
-Rune3DS can request cancellation by writing:
+Rune3DS can request cancellation for cache jobs by writing:
 
 ```text
 /3ds/Rune3DS/runefetch/cancel/<basename>.cancel
 ```
 
-RuneFetch checks for that marker between download/write chunks, deletes the job
-and marker, then writes `state=canceled`.
+RuneFetch checks for that marker between download/write chunks in cache mode,
+deletes the job and marker, then writes `state=canceled`. Stream install jobs
+only honor cancellation before AM starts; after that point the marker is deleted
+and the install continues. Reboot the console if a stream job must be stopped.
 
 ## Job Lifecycle
 

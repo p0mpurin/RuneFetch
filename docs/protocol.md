@@ -6,6 +6,7 @@ All paths are on SD.
 
 ```text
 /3ds/Rune3DS/runefetch/jobs/
+/3ds/Rune3DS/runefetch/cancel/
 /3ds/Rune3DS/runefetch/done/
 /3ds/Rune3DS/runefetch/failed/
 /3ds/Rune3DS/runefetch/state/
@@ -23,6 +24,7 @@ title_id=0004000000123400
 name=Example Title
 url=https://example.invalid/content.cia?token=...
 size=123456789
+mode=stream_install
 ```
 
 Required fields:
@@ -36,6 +38,17 @@ Recommended fields:
 - `title_id`
 - `name`
 - `size`
+- `mode`
+
+Modes:
+
+- `stream_install`: download and write directly to AM. This is the fast path.
+- `cache`: download the CIA to `/3ds/Rune3DS/cache/`.
+- `download_only`: legacy alias for cache mode.
+- `stream_install_unsafe`: legacy alias for stream install.
+
+Stream install mode cannot be safely canceled after AM starts. Reboot the
+console if a stream job must be stopped.
 
 `url` should be a direct CIA URL. For Rune/hShop jobs, Rune3DS should request
 the tokenized CDN URL and write it into the job immediately before asking the
@@ -76,20 +89,31 @@ result=00000000
 message=Downloading
 ```
 
-States:
+Common states:
 
 - `idle`
 - `downloading`
-- `ready`
-- `failed`
-- `paused`
+- `resuming`
+- `download_ready`
+- `download_failed`
+- `install_ready`
+- `install_failed`
+- `canceled`
+
+Rune3DS can request cancellation by writing:
+
+```text
+/3ds/Rune3DS/runefetch/cancel/<basename>.cancel
+```
+
+RuneFetch checks for that marker between download/write chunks, deletes the job
+and marker, then writes `state=canceled`.
 
 ## Job Lifecycle
 
 ```text
 jobs/<name>.job
-  -> done/<name>.job
-  -> failed/<name>.job
+  -> deleted after success or cancel
 ```
 
-The job file itself is moved only after RuneFetch has finished with it.
+Partial downloads remain as `.cia.part` so a later job can resume.

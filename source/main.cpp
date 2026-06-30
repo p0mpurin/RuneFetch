@@ -11,6 +11,11 @@ constexpr u64 STATUS_UPDATE_STEP = 0x40000;
 constexpr u64 FILE_FLUSH_STEP = 0x100000;
 constexpr u64 STREAM_INSTALL_STATUS_STEP = 0x80000;
 constexpr u32 HTTP_SHARED_MEMORY_SIZE = 1024 * 1024;
+constexpr Result RESULT_CANCELED = MAKERESULT(RL_TEMPORARY, RS_CANCELED, RM_APPLICATION, 1);
+constexpr u64 HTTP_RECEIVE_TIMEOUT_NS = 1000ULL * 1000ULL * 1000ULL;
+constexpr u64 STREAM_LATE_CANCEL_WINDOW = 1024 * 1024;
+constexpr u32 STREAM_RECONNECT_MAX = 12;
+constexpr u32 STREAM_LATE_RECONNECT_MAX = 1000;
 
 bool g_led_ready = false;
 u32 g_last_led_bucket = 0xFFFFFFFF;
@@ -18,6 +23,7 @@ u32 g_last_http_status = 0;
 u64 g_last_done = 0;
 u64 g_last_total = 0;
 const char *g_last_stage = "";
+bool g_job_canceled = false;
 
 Result init_http()
 {
@@ -170,6 +176,7 @@ Result ensure_dirs()
 	create_dir(archive, "/3ds/Rune3DS");
 	create_dir(archive, "/3ds/Rune3DS/runefetch");
 	create_dir(archive, "/3ds/Rune3DS/runefetch/jobs");
+	create_dir(archive, "/3ds/Rune3DS/runefetch/cancel");
 	create_dir(archive, "/3ds/Rune3DS/runefetch/done");
 	create_dir(archive, "/3ds/Rune3DS/runefetch/failed");
 	create_dir(archive, "/3ds/Rune3DS/runefetch/state");
@@ -277,6 +284,47 @@ bool delete_job(const char *job_name)
 	res = FSUSER_DeleteFile(archive, fsMakePath(PATH_ASCII, path));
 	FSUSER_CloseArchive(archive);
 	return R_SUCCEEDED(res);
+}
+
+bool delete_cancel_marker(const char *job_name)
+{
+	char path[256];
+	snprintf(path, sizeof(path), "/3ds/Rune3DS/runefetch/cancel/%s", job_name);
+	char *dot = strrchr(path, '.');
+	if(dot)
+		snprintf(dot, sizeof(path) - static_cast<size_t>(dot - path), ".cancel");
+
+	FS_Archive archive;
+	Result res = FSUSER_OpenArchive(&archive, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, nullptr));
+	if(R_FAILED(res))
+		return false;
+
+	res = FSUSER_DeleteFile(archive, fsMakePath(PATH_ASCII, path));
+	FSUSER_CloseArchive(archive);
+	return R_SUCCEEDED(res);
+}
+
+bool cancel_requested(const char *job_name)
+{
+	char path[256];
+	snprintf(path, sizeof(path), "/3ds/Rune3DS/runefetch/cancel/%s", job_name);
+	char *dot = strrchr(path, '.');
+	if(dot)
+		snprintf(dot, sizeof(path) - static_cast<size_t>(dot - path), ".cancel");
+
+	Handle file = 0;
+	Result res = FSUSER_OpenFileDirectly(&file, ARCHIVE_SDMC,
+		fsMakePath(PATH_EMPTY, nullptr),
+		fsMakePath(PATH_ASCII, path),
+		FS_OPEN_READ, 0);
+	if(R_FAILED(res))
+		return false;
+
+	FSFILE_Close(file);
+	g_job_canceled = true;
+	g_last_stage = "cancel_requested";
+	led_idle();
+	return true;
 }
 
 Result delete_path(const char *path)
@@ -450,6 +498,7 @@ Result download_job(const char *job_name, const char *url, const char *title_id,
 	g_last_http_status = 0;
 	g_last_done = 0;
 	g_last_total = expected_size;
+	g_job_canceled = false;
 
 	char base[128];
 	char part_path[256];
@@ -560,6 +609,12 @@ Result download_job(const char *job_name, const char *url, const char *title_id,
 
 	for(;;)
 	{
+		if(cancel_requested(job_name))
+		{
+			res = RESULT_CANCELED;
+			goto out;
+		}
+
 		u32 before = 0;
 		u32 after = 0;
 		httpcGetDownloadSizeState(&ctx, &before, nullptr);
@@ -656,6 +711,7 @@ Result stream_install_job(const char *job_name, const char *url, const char *tit
 	g_last_done = 0;
 	g_last_total = expected_size;
 	g_last_stage = "init";
+	g_job_canceled = false;
 
 	httpcContext ctx {};
 	u32 status = 0;
@@ -669,6 +725,35 @@ Result stream_install_job(const char *job_name, const char *url, const char *tit
 	u64 last_status_done = 0;
 	u32 context_pos = 0;
 	u32 reconnects = 0;
+	bool late_cancel_ignored = false;
+
+	auto cancel_too_late = [&]() -> bool {
+		return total && done + STREAM_LATE_CANCEL_WINDOW >= total;
+	};
+
+	auto check_cancel = [&]() -> bool {
+		if(late_cancel_ignored)
+			return false;
+		if(!cancel_requested(job_name))
+			return false;
+
+		if(cancel_too_late())
+		{
+			g_job_canceled = false;
+			g_last_stage = "cancel_too_late";
+			late_cancel_ignored = true;
+			delete_cancel_marker(job_name);
+			led_download_progress(done, total);
+			write_status("install_finishing", job_name, title_id, done, total, 0,
+				"Cancel requested too late; finishing install");
+			return false;
+		}
+
+		led_idle();
+		write_status("canceling", job_name, title_id, done, total, RESULT_CANCELED,
+			"Canceling RuneFetch job");
+		return true;
+	};
 
 	led_downloading();
 	write_status("install_stream_opening", job_name, title_id, 0, total, 0,
@@ -707,6 +792,12 @@ receive_loop:
 	context_pos = 0;
 	for(;;)
 	{
+		if(check_cancel())
+		{
+			res = RESULT_CANCELED;
+			goto out;
+		}
+
 		if(total && done >= total)
 		{
 			res = 0;
@@ -719,7 +810,7 @@ receive_loop:
 
 		g_last_stage = "http_receive";
 		res = httpcReceiveDataTimeout(&ctx, g_http_buffer, request_size,
-			10ULL * 1000ULL * 1000ULL * 1000ULL);
+			HTTP_RECEIVE_TIMEOUT_NS);
 
 		u32 pos = context_pos;
 		Result progress_res = httpcGetDownloadSizeState(&ctx, &pos, nullptr);
@@ -738,6 +829,12 @@ receive_loop:
 			chunk = request_size;
 		if(chunk)
 		{
+			if(check_cancel())
+			{
+				res = RESULT_CANCELED;
+				goto out;
+			}
+
 			u32 written = 0;
 			g_last_stage = "am_write";
 			Result write_res = FSFILE_Write(cia, &written, done, g_http_buffer, chunk, 0);
@@ -761,6 +858,12 @@ receive_loop:
 			}
 
 			svcSleepThread(2LL * 1000LL * 1000LL);
+
+			if(check_cancel())
+			{
+				res = RESULT_CANCELED;
+				goto out;
+			}
 		}
 
 		if(chunk == 0 && res == static_cast<Result>(HTTPC_RESULTCODE_DOWNLOADPENDING))
@@ -769,8 +872,17 @@ receive_loop:
 			continue;
 		if(R_FAILED(res))
 		{
-			while(done && done < total && reconnects < 6)
+			u32 max_reconnects = cancel_too_late()
+				? STREAM_LATE_RECONNECT_MAX
+				: STREAM_RECONNECT_MAX;
+			while(done && done < total && reconnects < max_reconnects)
 			{
+				if(check_cancel())
+				{
+					res = RESULT_CANCELED;
+					goto out;
+				}
+
 				++reconnects;
 				if(context_open)
 				{
@@ -785,7 +897,10 @@ receive_loop:
 				}
 				write_status("install_reconnecting", job_name, title_id, done, total, res,
 					"HTTP reconnecting during install");
-				svcSleepThread((500LL + 250LL * reconnects) * 1000LL * 1000LL);
+				u32 sleep_ms = 500 + 250 * reconnects;
+				if(sleep_ms > 2000)
+					sleep_ms = 2000;
+				svcSleepThread(static_cast<s64>(sleep_ms) * 1000LL * 1000LL);
 
 				g_last_stage = "http_reinit";
 				res = init_http();
@@ -803,6 +918,12 @@ receive_loop:
 					g_last_stage = "http_range_status";
 					g_last_http_status = status;
 					res = MAKERESULT(RL_PERMANENT, RS_INVALIDSTATE, RM_APPLICATION, status & 0x3FF);
+					if(cancel_too_late())
+					{
+						httpcCloseContext(&ctx);
+						context_open = false;
+						continue;
+					}
 					goto out;
 				}
 				goto receive_loop;
@@ -829,10 +950,19 @@ out:
 	}
 	if(cia_open)
 	{
+		if(R_SUCCEEDED(res) && check_cancel())
+			res = RESULT_CANCELED;
 		if(R_FAILED(res))
 		{
 			g_last_stage = "am_cancel";
-			AM_CancelCIAInstall(cia);
+			Result cancel_res = AM_CancelCIAInstall(cia);
+			AM_QueryAvailableExternalTitleDatabase(nullptr);
+			if(R_FAILED(cancel_res))
+			{
+				g_last_stage = "am_cancel_failed";
+				res = cancel_res;
+				g_job_canceled = false;
+			}
 		}
 		else
 		{
@@ -884,12 +1014,24 @@ void write_job_status()
 		copy_field(job_text, "mode", mode, sizeof(mode));
 		if(url[0])
 		{
-			bool cache_only = strcmp(mode, "cache") == 0 || strcmp(mode, "download_only") == 0;
-			Result job_res = cache_only ?
-				download_job(job_name, url, title_id, id, parse_u64(size_text)) :
-				stream_install_job(job_name, url, title_id, parse_u64(size_text));
+			bool stream_install = strcmp(mode, "stream_install") == 0 ||
+				strcmp(mode, "stream_install_unsafe") == 0;
+			Result job_res = stream_install ?
+				stream_install_job(job_name, url, title_id, parse_u64(size_text)) :
+				download_job(job_name, url, title_id, id, parse_u64(size_text));
 			if(R_SUCCEEDED(job_res))
 				deleted = delete_job(job_name);
+			else if(g_job_canceled)
+			{
+				delete_job(job_name);
+				delete_cancel_marker(job_name);
+				led_idle();
+				write_status("canceled", job_name, title_id, g_last_done,
+					g_last_total ? g_last_total : parse_u64(size_text), job_res,
+					"RuneFetch job canceled");
+				write_boot_marker("canceled");
+				return;
+			}
 			else
 			{
 				led_error();
@@ -899,10 +1041,10 @@ void write_job_status()
 						static_cast<unsigned long>(g_last_http_status));
 				else
 					snprintf(message, sizeof(message), "Job failed at %s", g_last_stage);
-				write_status(cache_only ? "download_failed" : "install_failed",
+				write_status(stream_install ? "install_failed" : "download_failed",
 					job_name, title_id, g_last_done,
 					g_last_total ? g_last_total : parse_u64(size_text), job_res, message);
-				write_boot_marker(cache_only ? "download_failed" : "install_failed");
+				write_boot_marker(stream_install ? "install_failed" : "download_failed");
 				return;
 			}
 		}
@@ -917,8 +1059,9 @@ void write_job_status()
 	}
 
 	char status[512];
-	bool cache_only = strcmp(mode, "cache") == 0 || strcmp(mode, "download_only") == 0;
-	const char *ready_state = cache_only ? "download_ready" : "install_ready";
+	bool stream_install = strcmp(mode, "stream_install") == 0 ||
+		strcmp(mode, "stream_install_unsafe") == 0;
+	const char *ready_state = stream_install ? "install_ready" : "download_ready";
 	int len = snprintf(status, sizeof(status),
 		"state=%s\n"
 		"job=%s\n"
@@ -936,12 +1079,15 @@ void write_job_status()
 		url[0] ? "yes" : "no",
 		deleted ? "yes" : "no",
 		g_led_ready ? "ready" : "unavailable",
-		cache_only ? "RuneFetch downloaded queued job" : "RuneFetch installed queued job");
+		stream_install ? "RuneFetch installed queued job" : "RuneFetch downloaded queued job");
 	if(len > 0)
 		write_file("/3ds/Rune3DS/runefetch/state/status.txt",
 			status, static_cast<u32>(len));
 	if(loaded && deleted)
+	{
+		delete_cancel_marker(job_name);
 		led_ready();
+	}
 	else
 		led_error();
 	write_boot_marker(loaded ? (deleted ? ready_state : "job_delete_failed") : "job_read_failed");
